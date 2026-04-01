@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: dt_ship_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dt_ship_manager
+    ports:
+      - "5432:5432"
+    volumes:
+      - dt_ship_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  dt_ship_postgres_data:
+
