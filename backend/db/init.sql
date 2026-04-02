@@ -55,3 +55,32 @@ create index if not exists orders_status_idx on orders(ship_status);
 create index if not exists orders_type_idx on orders(order_type);
 create index if not exists orders_abnormal_idx on orders(is_abnormal);
 
+create table if not exists product_images (
+  image_id uuid primary key default gen_random_uuid(),
+  sku_id uuid not null references skus(sku_id) on delete cascade,
+  storage_key text not null unique,
+  original_relpath text not null,
+  thumb_relpath text not null,
+  mime_type text not null,
+  file_ext text not null,
+  file_size bigint not null,
+  width integer not null,
+  height integer not null,
+  sha256 text not null,
+  sort_order integer not null,
+  is_primary boolean not null default false,
+  status text not null default 'active',
+  deleted_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists product_images_sku_sort_idx
+  on product_images(sku_id, sort_order);
+
+create index if not exists product_images_primary_idx
+  on product_images(sku_id, is_primary)
+  where status = 'active';
+
+create index if not exists product_images_status_idx
+  on product_images(status, deleted_at);
