@@ -24,13 +24,14 @@ with normalized_active_images as (
     image_id,
     row_number() over (
       partition by sku_id
-      order by sort_order, created_at, image_id
+      order by sort_order, image_id
     ) as next_sort_order
   from product_images
   where status = 'active'
 )
 update product_images as target
 set sort_order = normalized_active_images.next_sort_order
+  , updated_at = now()
 from normalized_active_images
 where target.image_id = normalized_active_images.image_id
   and target.sort_order is distinct from normalized_active_images.next_sort_order;
@@ -40,13 +41,14 @@ with collapsed_active_primaries as (
     image_id,
     row_number() over (
       partition by sku_id
-      order by sort_order, created_at, image_id
+      order by sort_order, image_id
     ) as primary_rank
   from product_images
   where status = 'active' and is_primary
 )
 update product_images as target
 set is_primary = false
+  , updated_at = now()
 from collapsed_active_primaries
 where target.image_id = collapsed_active_primaries.image_id
   and collapsed_active_primaries.primary_rank > 1;
