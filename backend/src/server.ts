@@ -2,6 +2,7 @@ import cors from 'cors'
 import express from 'express'
 import bcrypt from 'bcryptjs'
 import dotenv from 'dotenv'
+import { appMeta } from './appMeta.js'
 import { pool } from './db.js'
 import { requireAuth, signToken, type AuthPayload } from './auth.js'
 
@@ -16,12 +17,23 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? '123456'
 app.use(cors())
 app.use(express.json({ limit: '2mb' }))
 
+app.get('/api/meta', (_req, res) => {
+  res.json({
+    app: appMeta,
+    timestamp: new Date().toISOString(),
+  })
+})
+
 app.get('/api/health', async (_req, res) => {
   try {
     await pool.query('select 1')
-    res.json({ ok: true })
+    res.json({ ok: true, app: appMeta, db: 'ok' })
   } catch (err) {
-    res.status(500).json({ ok: false, error: (err as Error).message })
+    res.status(500).json({
+      ok: false,
+      app: appMeta,
+      error: (err as Error).message,
+    })
   }
 })
 
@@ -292,6 +304,5 @@ app.post('/api/push-subscriptions', requireAuth, async (req, res) => {
 })
 
 app.listen(port, () => {
-  console.log(`backend running on http://localhost:${port}`)
+  console.log(`${appMeta.displayName} backend running on http://localhost:${port}`)
 })
-

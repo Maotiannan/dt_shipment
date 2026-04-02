@@ -1,19 +1,115 @@
-version: "3.9"
-
 services:
-  postgres:
+  db:
     image: postgres:16
-    container_name: dt_ship_postgres
+    container_name: dt-shipment-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: dt_ship_manager
-    ports:
-      - "5432:5432"
+      TZ: ${TZ:-Asia/Shanghai}
+      POSTGRES_USER: ${DT_SHIPMENT_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DT_SHIPMENT_DB_PASSWORD}
+      POSTGRES_DB: ${DT_SHIPMENT_DB_NAME:-dt_ship_manager}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - dt_shipment_internal
     volumes:
-      - dt_ship_postgres_data:/var/lib/postgresql/data
+      - dt_shipment_postgres_data:/var/lib/postgresql/data
+
+  db_backup:
+    image: postgres:16
+    container_name: dt-shipment-db-backup
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      PGPASSWORD: ${DT_SHIPMENT_DB_PASSWORD}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${DT_SHIPMENT_DB_NAME:-dt_ship_manager}
+      POSTGRES_USER: ${DT_SHIPMENT_DB_USER:-postgres}
+      BACKUP_DIR: /backups
+      BACKUP_PREFIX: ${DT_SHIPMENT_BACKUP_PREFIX:-dt_shipment}
+      BACKUP_INTERVAL_SECONDS: ${DT_SHIPMENT_BACKUP_INTERVAL_SECONDS:-21600}
+      BACKUP_KEEP_DAYS: ${DT_SHIPMENT_BACKUP_KEEP_DAYS:-14}
+    command: ["/bin/sh", "/usr/local/bin/pg-backup-loop.sh"]
+    volumes:
+      - ${DT_SHIPMENT_BACKUP_DIR:-/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/backups}:/backups
+      - ./ops/pg-backup-loop.sh:/usr/local/bin/pg-backup-loop.sh:ro
+    networks:
+      - dt_shipment_internal
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: dt-shipment-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      NODE_ENV: production
+      PORT: 8787
+      JWT_SECRET: ${DT_SHIPMENT_JWT_SECRET}
+      ADMIN_USERNAME: ${DT_SHIPMENT_ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${DT_SHIPMENT_ADMIN_PASSWORD:-}
+      ADMIN_PASSWORD_HASH: ${DT_SHIPMENT_ADMIN_PASSWORD_HASH:-}
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: ${DT_SHIPMENT_DB_USER:-postgres}
+      DB_PASSWORD: ${DT_SHIPMENT_DB_PASSWORD}
+      DB_NAME: ${DT_SHIPMENT_DB_NAME:-dt_ship_manager}
+    ports:
+      - 127.0.0.1:${DT_SHIPMENT_BACKEND_PORT:-18787}:8787
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8787/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - dt_shipment_internal
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE: ${DT_SHIPMENT_VITE_API_BASE:-}
+    container_name: dt-shipment-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:${DT_SHIPMENT_FRONTEND_PORT:-18187}:80
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - dt_shipment_internal
+      - dainty_net
+
+networks:
+  dt_shipment_internal:
+    name: dt_shipment_internal
+  dainty_net:
+    external: true
 
 volumes:
-  dt_ship_postgres_data:
-
+  dt_shipment_postgres_data:
+    name: ${DT_SHIPMENT_DB_VOLUME_NAME:-dt_shipment_postgres_data}

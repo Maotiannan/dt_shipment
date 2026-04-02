@@ -1,7 +1,8 @@
-import { ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthSession } from '../lib/authSession'
 import { clearToken } from '../lib/apiClient'
+import { APP_META } from '../lib/runtimeConfig'
 
 export default function TopBar({ rightExtra }: { rightExtra?: ReactNode }) {
   const navigate = useNavigate()
@@ -19,7 +20,10 @@ export default function TopBar({ rightExtra }: { rightExtra?: ReactNode }) {
 
   return (
     <header className="topBar">
-      <div className="topBarTitle">发货管家</div>
+      <div className="topBarTitleWrap">
+        <div className="topBarTitle">{APP_META.name}</div>
+        <div className="topBarVersion">{APP_META.versionLabel}</div>
+      </div>
       <div className="topBarRight">
         {rightExtra}
         {!loading && session?.user?.userId ? (
@@ -31,4 +35,3 @@ export default function TopBar({ rightExtra }: { rightExtra?: ReactNode }) {
     </header>
   )
 }
-

@@ -1,5 +1,6 @@
-const API_BASE =
-  (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:8787'
+import { resolveApiBase } from './runtimeConfig'
+
+const API_BASE = resolveApiBase(import.meta.env.VITE_API_BASE as string | undefined)
 
 const TOKEN_KEY = 'dt_auth_token'
 
@@ -37,4 +38,3 @@ export async function apiRequest<T>(
   }
   return (await resp.json()) as T
 }
-

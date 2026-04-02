@@ -1,0 +1,13 @@
+{
+  "name": "dt-shipment",
+  "private": true,
+  "version": "1.1.0",
+  "displayName": "发货管家",
+  "description": "多账号发货与结算管理系统",
+  "scripts": {
+    "backup:db": "bash ops/backup-postgres-once.sh",
+    "docker:down": "docker compose down",
+    "docker:up": "docker compose up -d --build",
+    "test:smoke": "node scripts/smoke-test.mjs"
+  }
+}
