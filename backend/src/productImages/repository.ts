@@ -42,6 +42,18 @@ export async function skuExists(skuId: string, db?: ProductImageDb) {
   return rows.length > 0
 }
 
+export async function lockSkuForImageMutation(skuId: string, db?: ProductImageDb) {
+  const executor = getDb(db)
+  const { rows } = await executor.query<{ sku_id: string }>(
+    `select sku_id
+     from skus
+     where sku_id = $1
+     for update`,
+    [skuId]
+  )
+  return rows.length > 0
+}
+
 export async function listActiveProductImages(skuId: string, db?: ProductImageDb) {
   const executor = getDb(db)
   const { rows } = await executor.query<ProductImageRow>(

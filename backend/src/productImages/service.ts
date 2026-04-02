@@ -6,8 +6,8 @@ import {
   type ProductImageRow,
   getActiveProductImageById,
   insertProductImage,
+  lockSkuForImageMutation,
   listActiveProductImages,
-  skuExists,
 } from './repository.js'
 import {
   InvalidProductImageFileError,
@@ -38,6 +38,10 @@ export class ProductImageServiceError extends Error {
   ) {
     super(message)
   }
+}
+
+export const productImageServiceDb = {
+  connect: () => pool.connect(),
 }
 
 function toProductImageDto(row: ProductImageRow): ProductImageDto {
@@ -101,13 +105,14 @@ export async function uploadProductImages(
     ensureValidUploadFile(file, env)
   }
 
-  const client = await pool.connect()
+  let client: Awaited<ReturnType<typeof productImageServiceDb.connect>> | null = null
   const persistedPaths: Array<{ originalAbsPath: string; thumbAbsPath: string }> = []
 
   try {
+    client = await productImageServiceDb.connect()
     await client.query('begin')
 
-    if (!(await skuExists(params.skuId, client))) {
+    if (!(await lockSkuForImageMutation(params.skuId, client))) {
       throw new ProductImageServiceError('sku not found', 404)
     }
 
@@ -166,11 +171,11 @@ export async function uploadProductImages(
     await client.query('commit')
     return insertedImages
   } catch (error) {
-    await client.query('rollback').catch(() => undefined)
+    await client?.query('rollback').catch(() => undefined)
     await Promise.all(persistedPaths.map((item) => removePersistedProductImage(item)))
     throw error
   } finally {
-    client.release()
+    client?.release()
     await cleanupTempFiles(files)
   }
 }
