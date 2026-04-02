@@ -6,7 +6,44 @@ import { appMeta } from './appMeta.js'
 import { pool } from './db.js'
 import { requireAuth, signToken, type AuthPayload } from './auth.js'
 import { loadProductImageConfig } from './productImages/config.js'
+import { productImageRepository, type ProductImageRow } from './productImages/repository.js'
 import { createProductImageRouter } from './productImages/routes.js'
+
+function toProductImageSummary(row: ProductImageRow) {
+  return {
+    image_id: row.image_id,
+    sort_order: Number(row.sort_order),
+    is_primary: row.is_primary,
+    mime_type: row.mime_type,
+    file_size: Number(row.file_size),
+    width: row.width,
+    height: row.height,
+    thumb_url: `/api/product-images/${row.image_id}/thumb`,
+    original_url: `/api/product-images/${row.image_id}/original`,
+  }
+}
+
+async function listPrimaryImageThumbUrlsForSkus(skuIds: string[]) {
+  if (skuIds.length === 0) {
+    return new Map<string, string>()
+  }
+
+  const { rows } = await pool.query<{
+    sku_id: string
+    image_id: string
+  }>(
+    `select sku_id, image_id
+     from product_images
+     where sku_id = any($1::uuid[])
+       and status = 'active'
+       and is_primary = true`,
+    [skuIds]
+  )
+
+  return new Map(
+    rows.map((row) => [row.sku_id, `/api/product-images/${row.image_id}/thumb`] as const)
+  )
+}
 
 export function createApp(env: NodeJS.ProcessEnv = process.env) {
   loadProductImageConfig(env)
@@ -109,7 +146,15 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
       `select sku_id,sku_code,name,spec,unit_price,category,status,created_at,inventory_id,inventory_quantity
        from skus order by created_at desc`
     )
-    res.json(rows)
+    const primaryThumbs = await listPrimaryImageThumbUrlsForSkus(
+      rows.map((row) => String(row.sku_id))
+    )
+    res.json(
+      rows.map((row) => ({
+        ...row,
+        primary_image_thumb_url: primaryThumbs.get(String(row.sku_id)) ?? null,
+      }))
+    )
   })
 
   app.post('/api/skus', requireAuth, async (req, res) => {
@@ -153,6 +198,29 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
       ]
     )
     res.json(rows[0] ?? null)
+  })
+
+  app.get('/api/skus/:id', requireAuth, async (req, res) => {
+    const { id } = req.params
+    const skuId = String(id)
+    const { rows } = await pool.query(
+      `select sku_id,sku_code,name,spec,unit_price,category,status,created_at,inventory_id,inventory_quantity
+       from skus
+       where sku_id = $1
+       limit 1`,
+      [skuId]
+    )
+
+    const sku = rows[0]
+    if (!sku) {
+      return res.status(404).json({ error: 'sku not found' })
+    }
+
+    const images = await productImageRepository.listActiveProductImages(skuId)
+    return res.json({
+      ...sku,
+      images: images.map((image) => toProductImageSummary(image)),
+    })
   })
 
   app.get('/api/orders', requireAuth, async (req, res) => {

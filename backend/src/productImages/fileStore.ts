@@ -27,6 +27,7 @@ export const productImageFileIo = {
   readFile: fs.readFile.bind(fs),
   writeFile: fs.writeFile.bind(fs),
   mkdir: fs.mkdir.bind(fs),
+  rename: fs.rename.bind(fs),
   rm: fs.rm.bind(fs),
 }
 
@@ -118,4 +119,107 @@ export async function removePersistedProductImage(paths: {
     paths.originalAbsPath ? productImageFileIo.rm(paths.originalAbsPath, { force: true }) : Promise.resolve(),
     paths.thumbAbsPath ? productImageFileIo.rm(paths.thumbAbsPath, { force: true }) : Promise.resolve(),
   ])
+}
+
+export async function movePersistedProductImageToTrash(
+  params: {
+    imageId: string
+    originalRelpath: string
+    thumbRelpath: string
+    deletedAt?: Date
+  },
+  env: NodeJS.ProcessEnv = process.env
+) {
+  const config = loadProductImageConfig(env)
+  const deletedAt = params.deletedAt ?? new Date()
+  const year = String(deletedAt.getUTCFullYear())
+  const month = String(deletedAt.getUTCMonth() + 1).padStart(2, '0')
+  const fileExt = path.extname(params.originalRelpath) || '.jpg'
+  const originalAbsPath = resolveWithinRoot(config.rootDir, params.originalRelpath)
+  const thumbAbsPath = resolveWithinRoot(config.rootDir, params.thumbRelpath)
+  const trashOriginalRelpath = path.posix.join('trash', year, month, `${params.imageId}${fileExt}`)
+  const trashThumbRelpath = path.posix.join('trash', year, month, `${params.imageId}.jpg`)
+  const trashOriginalAbsPath = resolveWithinRoot(config.rootDir, trashOriginalRelpath)
+  const trashThumbAbsPath = resolveWithinRoot(config.rootDir, trashThumbRelpath)
+  const movedPairs: Array<{ from: string; to: string }> = []
+
+  await productImageFileIo.mkdir(path.dirname(trashOriginalAbsPath), { recursive: true })
+  await productImageFileIo.mkdir(path.dirname(trashThumbAbsPath), { recursive: true })
+
+  try {
+    await productImageFileIo.rename(originalAbsPath, trashOriginalAbsPath)
+    movedPairs.push({ from: trashOriginalAbsPath, to: originalAbsPath })
+
+    await productImageFileIo.rename(thumbAbsPath, trashThumbAbsPath)
+    movedPairs.push({ from: trashThumbAbsPath, to: thumbAbsPath })
+  } catch (error) {
+    for (const pair of movedPairs.reverse()) {
+      await productImageFileIo.rename(pair.from, pair.to).catch(() => undefined)
+    }
+    throw error
+  }
+
+  return {
+    originalRelpath: trashOriginalRelpath,
+    thumbRelpath: trashThumbRelpath,
+    originalAbsPath: trashOriginalAbsPath,
+    thumbAbsPath: trashThumbAbsPath,
+  }
+}
+
+export async function removeTrashFilePair(paths: {
+  originalRelpath?: string
+  thumbRelpath?: string
+}, env: NodeJS.ProcessEnv = process.env) {
+  const config = loadProductImageConfig(env)
+  await Promise.all([
+    paths.originalRelpath
+      ? productImageFileIo.rm(resolveWithinRoot(config.rootDir, paths.originalRelpath), { force: true })
+      : Promise.resolve(),
+    paths.thumbRelpath
+      ? productImageFileIo.rm(resolveWithinRoot(config.rootDir, paths.thumbRelpath), { force: true })
+    : Promise.resolve(),
+  ])
+}
+
+export async function restorePersistedProductImageFromTrash(
+  params: {
+    originalRelpath: string
+    thumbRelpath: string
+    trashOriginalRelpath: string
+    trashThumbRelpath: string
+  },
+  env: NodeJS.ProcessEnv = process.env
+) {
+  const config = loadProductImageConfig(env)
+  const originalAbsPath = resolveWithinRoot(config.rootDir, params.originalRelpath)
+  const thumbAbsPath = resolveWithinRoot(config.rootDir, params.thumbRelpath)
+  const trashOriginalAbsPath = resolveWithinRoot(config.rootDir, params.trashOriginalRelpath)
+  const trashThumbAbsPath = resolveWithinRoot(config.rootDir, params.trashThumbRelpath)
+  const movedPairs: Array<{ from: string; to: string }> = []
+
+  await productImageFileIo.mkdir(path.dirname(originalAbsPath), { recursive: true })
+  await productImageFileIo.mkdir(path.dirname(thumbAbsPath), { recursive: true })
+
+  try {
+    await productImageFileIo.rename(trashOriginalAbsPath, originalAbsPath)
+    movedPairs.push({ from: originalAbsPath, to: trashOriginalAbsPath })
+
+    await productImageFileIo.rename(trashThumbAbsPath, thumbAbsPath)
+    movedPairs.push({ from: thumbAbsPath, to: trashThumbAbsPath })
+  } catch (error) {
+    for (const pair of movedPairs.reverse()) {
+      await productImageFileIo.rename(pair.from, pair.to).catch(() => undefined)
+    }
+    throw error
+  }
+}
+
+export const productImageFileStore = {
+  persistProductImage,
+  readStoredProductImage,
+  removePersistedProductImage,
+  movePersistedProductImageToTrash,
+  removeTrashFilePair,
+  restorePersistedProductImageFromTrash,
 }

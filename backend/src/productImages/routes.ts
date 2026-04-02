@@ -5,8 +5,12 @@ import { Router } from 'express'
 import { requireAuth } from '../auth.js'
 import { loadProductImageConfig } from './config.js'
 import {
+  cleanupDeletedProductImages,
   ProductImageServiceError,
+  markProductImagePrimary,
   readProductImageBinary,
+  reorderProductImages,
+  softDeleteProductImage,
   uploadProductImages,
 } from './service.js'
 
@@ -88,6 +92,60 @@ export function createProductImageRouter(env: NodeJS.ProcessEnv = process.env) {
     try {
       const file = await readProductImageBinary(String(req.params.imageId), 'original', env)
       return res.type(file.contentType).send(file.buffer)
+    } catch (error) {
+      return sendProductImageError(res, error)
+    }
+  })
+
+  router.patch('/api/skus/:id/images/:imageId/primary', requireAuth, async (req, res) => {
+    try {
+      const result = await markProductImagePrimary(
+        {
+          skuId: String(req.params.id),
+          imageId: String(req.params.imageId),
+        },
+        env
+      )
+      return res.json({ ok: true, ...result })
+    } catch (error) {
+      return sendProductImageError(res, error)
+    }
+  })
+
+  router.patch('/api/skus/:id/images/reorder', requireAuth, async (req, res) => {
+    try {
+      const result = await reorderProductImages(
+        {
+          skuId: String(req.params.id),
+          imageIds: Array.isArray(req.body?.imageIds) ? req.body.imageIds : [],
+        },
+        env
+      )
+      return res.json(result)
+    } catch (error) {
+      return sendProductImageError(res, error)
+    }
+  })
+
+  router.delete('/api/skus/:id/images/:imageId', requireAuth, async (req, res) => {
+    try {
+      const result = await softDeleteProductImage(
+        {
+          skuId: String(req.params.id),
+          imageId: String(req.params.imageId),
+        },
+        env
+      )
+      return res.json(result)
+    } catch (error) {
+      return sendProductImageError(res, error)
+    }
+  })
+
+  router.post('/api/internal/jobs/cleanup-product-images', requireAuth, async (_req, res) => {
+    try {
+      const result = await cleanupDeletedProductImages({ env })
+      return res.json({ ok: true, ...result })
     } catch (error) {
       return sendProductImageError(res, error)
     }
