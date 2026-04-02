@@ -38,6 +38,42 @@ function makePool(scenario: Scenario) {
         return { rows: [] }
       }
 
+      if (normalized.includes('from information_schema.columns') && normalized.includes('product_images')) {
+        return {
+          rows: [
+            { column_name: 'image_id', is_nullable: 'NO', column_default: 'gen_random_uuid()' },
+            { column_name: 'sku_id', is_nullable: 'NO', column_default: null },
+            { column_name: 'storage_key', is_nullable: 'NO', column_default: null },
+            { column_name: 'original_relpath', is_nullable: 'NO', column_default: null },
+            { column_name: 'thumb_relpath', is_nullable: 'NO', column_default: null },
+            { column_name: 'mime_type', is_nullable: 'NO', column_default: null },
+            { column_name: 'file_ext', is_nullable: 'NO', column_default: null },
+            { column_name: 'file_size', is_nullable: 'NO', column_default: null },
+            { column_name: 'width', is_nullable: 'NO', column_default: null },
+            { column_name: 'height', is_nullable: 'NO', column_default: null },
+            { column_name: 'sha256', is_nullable: 'NO', column_default: null },
+            { column_name: 'sort_order', is_nullable: 'NO', column_default: '1' },
+            { column_name: 'is_primary', is_nullable: 'NO', column_default: 'false' },
+            { column_name: 'status', is_nullable: 'NO', column_default: "'active'::text" },
+            { column_name: 'created_at', is_nullable: 'NO', column_default: 'now()' },
+            { column_name: 'updated_at', is_nullable: 'NO', column_default: 'now()' },
+            { column_name: 'deleted_at', is_nullable: 'YES', column_default: null },
+          ],
+        }
+      }
+
+      if (normalized.includes('from pg_constraint') && normalized.includes("contype = 'p'")) {
+        return { rows: [{ has_primary_key: true }] }
+      }
+
+      if (normalized.includes('from pg_constraint') && normalized.includes("contype = 'u'")) {
+        return { rows: [{ has_storage_key_unique: true }] }
+      }
+
+      if (normalized.includes('from pg_constraint') && normalized.includes("contype = 'f'")) {
+        return { rows: [{ has_sku_foreign_key: true }] }
+      }
+
       if (normalized.includes("from pg_indexes") && normalized.includes("product_images_sku_sort_idx")) {
         return { rows: state.legacyIndexNames.map((indexname) => ({ indexname })) }
       }
@@ -56,13 +92,30 @@ function makePool(scenario: Scenario) {
       if (
         normalized.includes('count(*) as active_count') &&
         normalized.includes('distinct_sort_count') &&
-        normalized.includes('primary_count')
+        normalized.includes('primary_count') &&
+        normalized.includes('canonical_primary_count')
       ) {
         return { rows: [{ has_duplicates: state.hasCanonicalDrift }] }
       }
 
       if (normalized.startsWith('with normalized_active_images as')) {
         repairRan = true
+        return { rows: [] }
+      }
+
+      if (normalized.startsWith('insert into skus (sku_id, name, status)')) {
+        return { rows: [] }
+      }
+
+      if (normalized.startsWith('with legacy_rows as (')) {
+        return { rows: [] }
+      }
+
+      if (normalized.startsWith('alter table if exists product_images alter column')) {
+        return { rows: [] }
+      }
+
+      if (normalized.startsWith('alter table if exists product_images add constraint')) {
         return { rows: [] }
       }
 

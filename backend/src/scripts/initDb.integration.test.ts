@@ -201,9 +201,57 @@ async function seedPartialProductImagesTable(pool: Pool) {
 
   await pool.query(`
     create table if not exists product_images (
-      image_id uuid primary key,
-      sku_id uuid
+      image_id uuid,
+      sku_id uuid,
+      storage_key text
     );
+  `)
+}
+
+async function seedWrongPrimaryState(pool: Pool) {
+  await pool.query(`
+    create table if not exists skus (
+      sku_id uuid primary key,
+      name text not null,
+      status text not null default 'active'
+    );
+  `)
+
+  await pool.query(`
+    create table if not exists product_images (
+      image_id uuid primary key,
+      sku_id uuid not null references skus(sku_id) on delete cascade,
+      storage_key text not null unique,
+      original_relpath text not null,
+      thumb_relpath text not null,
+      mime_type text not null,
+      file_ext text not null,
+      file_size bigint not null,
+      width integer not null,
+      height integer not null,
+      sha256 text not null,
+      sort_order integer not null,
+      is_primary boolean not null default false,
+      status text not null default 'active',
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+  `)
+
+  await pool.query(`
+    insert into skus (sku_id, name)
+    values ('33333333-3333-3333-3333-333333333333', 'wrong primary sku');
+  `)
+
+  await pool.query(`
+    insert into product_images (
+      image_id, sku_id, storage_key, original_relpath, thumb_relpath,
+      mime_type, file_ext, file_size, width, height, sha256,
+      sort_order, is_primary, status, created_at, updated_at
+    ) values
+      ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '33333333-3333-3333-3333-333333333333', 'wrong/a', 'a', 'a', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-a', 1, false, 'active', '2026-04-01 12:00:00+00', '2026-04-01 12:00:00+00'),
+      ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '33333333-3333-3333-3333-333333333333', 'wrong/b', 'b', 'b', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-b', 2, true,  'active', '2026-04-01 12:01:00+00', '2026-04-01 12:01:00+00'),
+      ('cccccccc-cccc-cccc-cccc-cccccccccccc', '33333333-3333-3333-3333-333333333333', 'wrong/c', 'c', 'c', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-c', 3, false, 'active', '2026-04-01 12:02:00+00', '2026-04-01 12:02:00+00');
   `)
 }
 
@@ -243,6 +291,43 @@ async function readProductImageColumns(pool: Pool) {
   `)
 
   return columns.rows.map((row) => row.column_name)
+}
+
+async function readProductImageColumnMetadata(pool: Pool) {
+  const columns = await pool.query<{
+    column_name: string
+    is_nullable: 'YES' | 'NO'
+    column_default: string | null
+  }>(`
+    select column_name, is_nullable, column_default
+    from information_schema.columns
+    where table_schema = current_schema()
+      and table_name = 'product_images'
+    order by column_name
+  `)
+
+  return Object.fromEntries(
+    columns.rows.map((row) => [
+      row.column_name,
+      { isNullable: row.is_nullable, columnDefault: row.column_default },
+    ])
+  ) as Record<string, { isNullable: 'YES' | 'NO'; columnDefault: string | null }>
+}
+
+async function readProductImageConstraintNames(pool: Pool) {
+  const constraints = await pool.query<{ conname: string; contype: string }>(`
+    select constraint_row.conname, constraint_row.contype
+    from pg_constraint constraint_row
+    join pg_class table_row
+      on table_row.oid = constraint_row.conrelid
+    join pg_namespace namespace_row
+      on namespace_row.oid = table_row.relnamespace
+    where namespace_row.nspname = current_schema()
+      and table_row.relname = 'product_images'
+    order by constraint_row.conname
+  `)
+
+  return constraints.rows.map((row) => `${row.conname}:${row.contype}`)
 }
 
 const schemaSql = readFileSync(path.resolve(process.cwd(), 'db/init.sql'), 'utf8')
@@ -333,6 +418,21 @@ dbTest('db:init converges clean, legacy, gapped, and partial postgres states', a
   })
 
   await withDisposablePostgres(async (pool) => {
+    await seedWrongPrimaryState(pool)
+    await runInitDb(pool, schemaSql)
+
+    const state = await readProductImageState(pool)
+    assert.deepEqual(
+      state.rows.map((row) => [row.image_id, row.sort_order, row.is_primary]),
+      [
+        ['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 1, true],
+        ['bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 2, false],
+        ['cccccccc-cccc-cccc-cccc-cccccccccccc', 3, false],
+      ]
+    )
+  })
+
+  await withDisposablePostgres(async (pool) => {
     await seedPartialProductImagesTable(pool)
     await runInitDb(pool, schemaSql)
 
@@ -355,6 +455,36 @@ dbTest('db:init converges clean, legacy, gapped, and partial postgres states', a
       'thumb_relpath',
       'updated_at',
       'width',
+    ])
+
+    const metadata = await readProductImageColumnMetadata(pool)
+    assert.equal(metadata.image_id.isNullable, 'NO')
+    assert.ok(metadata.image_id.columnDefault?.includes('gen_random_uuid()'))
+    assert.equal(metadata.sku_id.isNullable, 'NO')
+    assert.equal(metadata.storage_key.isNullable, 'NO')
+    assert.equal(metadata.original_relpath.isNullable, 'NO')
+    assert.equal(metadata.thumb_relpath.isNullable, 'NO')
+    assert.equal(metadata.mime_type.isNullable, 'NO')
+    assert.equal(metadata.file_ext.isNullable, 'NO')
+    assert.equal(metadata.file_size.isNullable, 'NO')
+    assert.equal(metadata.width.isNullable, 'NO')
+    assert.equal(metadata.height.isNullable, 'NO')
+    assert.equal(metadata.sha256.isNullable, 'NO')
+    assert.equal(metadata.sort_order.isNullable, 'NO')
+    assert.ok(metadata.sort_order.columnDefault?.includes('1'))
+    assert.equal(metadata.is_primary.isNullable, 'NO')
+    assert.ok(metadata.is_primary.columnDefault?.includes('false'))
+    assert.equal(metadata.status.isNullable, 'NO')
+    assert.ok(metadata.status.columnDefault?.includes('active'))
+    assert.equal(metadata.created_at.isNullable, 'NO')
+    assert.ok(metadata.created_at.columnDefault?.includes('now()') || metadata.created_at.columnDefault?.includes('CURRENT_TIMESTAMP'))
+    assert.equal(metadata.updated_at.isNullable, 'NO')
+    assert.ok(metadata.updated_at.columnDefault?.includes('now()') || metadata.updated_at.columnDefault?.includes('CURRENT_TIMESTAMP'))
+
+    assert.deepEqual(await readProductImageConstraintNames(pool), [
+      'product_images_pkey:p',
+      'product_images_sku_id_fkey:f',
+      'product_images_storage_key_key:u',
     ])
   })
 })
