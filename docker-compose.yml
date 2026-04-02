@@ -70,6 +70,13 @@ services:
       DB_USER: ${DT_SHIPMENT_DB_USER:-postgres}
       DB_PASSWORD: ${DT_SHIPMENT_DB_PASSWORD}
       DB_NAME: ${DT_SHIPMENT_DB_NAME:-dt_ship_manager}
+      PRODUCT_IMAGE_ROOT: ${PRODUCT_IMAGE_ROOT:-/data/assets/products}
+      PRODUCT_IMAGE_TMP_DIR: ${PRODUCT_IMAGE_TMP_DIR:-/data/assets/uploads/tmp}
+      PRODUCT_IMAGE_MAX_FILES: ${PRODUCT_IMAGE_MAX_FILES:-12}
+      PRODUCT_IMAGE_MAX_FILE_MB: ${PRODUCT_IMAGE_MAX_FILE_MB:-10}
+      PRODUCT_IMAGE_ALLOWED_MIME: ${PRODUCT_IMAGE_ALLOWED_MIME:-image/jpeg,image/png,image/webp}
+      PRODUCT_IMAGE_THUMB_WIDTH: ${PRODUCT_IMAGE_THUMB_WIDTH:-480}
+      PRODUCT_IMAGE_TRASH_RETENTION_DAYS: ${PRODUCT_IMAGE_TRASH_RETENTION_DAYS:-30}
     ports:
       - 127.0.0.1:${DT_SHIPMENT_BACKEND_PORT:-18787}:8787
     healthcheck:
@@ -80,6 +87,8 @@ services:
       start_period: 20s
     networks:
       - dt_shipment_internal
+    volumes:
+      - ${DT_SHIPMENT_DATA_ROOT:-/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment}/assets:/data/assets
 
   frontend:
     build:

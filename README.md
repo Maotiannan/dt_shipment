@@ -1,6 +1,6 @@
 # 发货管家 `dt_shipment`
 
-面向多账号电商场景的发货与结算系统。当前版本基于 `React 19 + Vite + Express 5 + PostgreSQL 16`，按 Mac Docker + Cloudflare Tunnel + NAS 备份模型完成了本地生产化适配。
+面向多账号电商场景的发货与结算系统。当前版本基于 `React 19 + Vite + Express 5 + PostgreSQL 16`，按 Mac Docker + Cloudflare Tunnel + NAS 文件仓模型完成了本地生产化适配。
 
 ## 当前部署结论
 
@@ -30,17 +30,30 @@
 
 PostgreSQL 的热数据目录不能直接放在 SMB 共享上。原因是 PostgreSQL 初始化时必须对 `PGDATA` 做 `chown/chmod`，而 macOS 挂载的 `smbfs` 会返回 `Operation not permitted`，数据库无法启动。
 
-因此当前实现采用两层持久化:
+因此当前实现采用三层持久化:
 
 - 热数据: Docker named volume `dt_shipment_postgres_data`
 - 冷备份: NAS 目录 `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/backups`
+- 商品图片原图与缩略图: NAS 目录 `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products`
 - 运行配置: NAS 目录 `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/env/dt_shipment.env`
 
 这套方案的取舍是:
 
 - 运行稳定，PostgreSQL 能正常工作
 - NAS 里持续保留可恢复备份
+- 商品图片和缩略图不占用 Docker 本地卷，统一落到 NAS
 - 数据库活跃数据仍占用 Docker Desktop 本地磁盘，需要定期关注容量
+
+## 商品图片存储
+
+商品图片采用“NAS 私有文件仓 + PostgreSQL 元数据”模型:
+
+- 原图目录: `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products/originals`
+- 缩略图目录: `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products/thumbs`
+- 回收站目录: `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products/trash`
+- 数据库只保存 `sku_id`、排序、主图标记、相对路径、尺寸、哈希和删除状态等元数据
+- 前端商品列表优先读取缩略图，点击后再按需加载原图
+- 所有图片读取都经由 `dt_shipment` 后端鉴权代理，不复用 Alist / PicList 的公开访问范围
 
 ## 目录结构
 
@@ -81,6 +94,13 @@ dt_shipment/
 | `DT_SHIPMENT_BACKUP_KEEP_DAYS` | 备份保留天数，默认 `14` 天 |
 | `DT_SHIPMENT_PUBLIC_HOST` | 期望绑定域名，当前为 `ship.dainty.vip` |
 | `DT_SHIPMENT_SMOKE_BASE_URL` | API 冒烟测试入口地址 |
+| `PRODUCT_IMAGE_ROOT` | 容器内商品图片根目录，默认 `/data/assets/products` |
+| `PRODUCT_IMAGE_TMP_DIR` | 容器内上传暂存目录，默认 `/data/assets/uploads/tmp` |
+| `PRODUCT_IMAGE_MAX_FILES` | 单次最多上传图片数，默认 `12` |
+| `PRODUCT_IMAGE_MAX_FILE_MB` | 单张图片大小限制，默认 `10` MB |
+| `PRODUCT_IMAGE_ALLOWED_MIME` | 允许上传的图片 MIME 列表 |
+| `PRODUCT_IMAGE_THUMB_WIDTH` | 缩略图目标宽度，默认 `480` |
+| `PRODUCT_IMAGE_TRASH_RETENTION_DAYS` | 图片回收站保留天数，默认 `30` |
 
 ## 本地生产部署
 
@@ -89,6 +109,8 @@ dt_shipment/
 ```bash
 docker compose --env-file /Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/env/dt_shipment.env up -d --build
 ```
+
+启动前必须先确认 NAS 共享已经挂载到本机，并且 `DT_SHIPMENT_DATA_ROOT` 指向该挂载目录。否则 Docker 会在本机创建同名目录，导致商品图片误落本地磁盘，破坏“图片在 NAS、数据库热数据在本地卷”的持久化假设。
 
 停止:
 
@@ -102,20 +124,13 @@ docker compose --env-file /Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipme
 
 ## Cloudflare Tunnel 配置
 
-当前 tunnel 目标服务已经具备接入条件:
+当前 tunnel 目标服务配置如下:
 
 - Tunnel 内部服务地址: `http://dt-shipment-frontend:80`
 - `dt-shipment-frontend` 已加入 Docker 网络 `dainty_net`
+- 公网域名为 `ship.dainty.vip`
 
-你需要在 Cloudflare Zero Trust / Tunnel 的网页面板里做两件事:
-
-1. 新增 hostname: `ship.dainty.vip` -> `http://dt-shipment-frontend:80`
-2. 删除旧 hostname: `xianyu.dainty.vip`
-
-当前已确认:
-
-- `ship.dainty.vip` 还未解析
-- `xianyu.dainty.vip` 仍指向已经停运的旧服务，公网返回 `502`
+如果后续重建 tunnel、迁移环境或更换域名，仍需要在 Cloudflare Zero Trust / Tunnel 网页面板里手工维护 hostname 路由，把目标指向 `http://dt-shipment-frontend:80`。
 
 ## 自动备份
 
@@ -136,6 +151,8 @@ npm run backup:db
 - `dt_shipment_YYYYMMDDTHHMMSS.dump`
 - `dt_shipment_globals_YYYYMMDDTHHMMSS.sql`
 
+图片删除回收站不会进入数据库备份，而是保存在 NAS 文件仓内，由清理任务按保留期清除。
+
 ## API 冒烟测试
 
 当前项目优先采用 API 自动验证，不依赖人工点页面。
@@ -155,7 +172,18 @@ npm run test:smoke
 - `/api/meta`
 - `/api/auth/login`
 - `/api/auth/me`
-- `/api/accounts`
+- `POST /api/skus`
+- `POST /api/skus/:id/images`
+- `PATCH /api/skus/:id/images/reorder`
+- `PATCH /api/skus/:id/images/:imageId/primary`
+- `DELETE /api/skus/:id/images/:imageId`
+- `POST /api/internal/jobs/cleanup-product-images`
+
+如果要直接验证公网入口，可额外执行:
+
+```bash
+curl -I https://ship.dainty.vip
+```
 
 ## 版本管理
 
@@ -198,6 +226,14 @@ npm run dev
 | `POST /api/auth/login` | 登录 |
 | `GET /api/accounts` | 账号列表 |
 | `GET /api/skus` | 商品列表 |
+| `GET /api/skus/:id` | 商品详情与图片列表 |
+| `POST /api/skus/:id/images` | 上传商品图片 |
+| `GET /api/product-images/:imageId/thumb` | 鉴权读取缩略图 |
+| `GET /api/product-images/:imageId/original` | 鉴权读取原图 |
+| `PATCH /api/skus/:id/images/reorder` | 调整商品图片顺序 |
+| `PATCH /api/skus/:id/images/:imageId/primary` | 设置商品主图 |
+| `DELETE /api/skus/:id/images/:imageId` | 删除商品图片到回收站 |
+| `POST /api/internal/jobs/cleanup-product-images` | 清理过期图片回收站文件 |
 | `GET /api/orders` | 订单列表 |
 | `POST /api/orders/bulkUpsert` | 订单批量导入/更新 |
 
@@ -219,5 +255,6 @@ npm run dev
 - 新增 API 元信息接口
 - 新增 Docker 化前后端
 - 新增 NAS 自动备份链路
+- 新增商品图片 NAS 私有文件仓、缩略图和回收站清理链路
 - 新增 API 冒烟脚本
 - 宿主机统一启动脚本已接入本项目
