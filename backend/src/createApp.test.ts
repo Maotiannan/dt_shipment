@@ -13,3 +13,15 @@ test('createApp wires api routes without starting the listener', () => {
   assert.ok(routes.includes('/api/health'))
   assert.ok(routes.includes('/api/auth/login'))
 })
+
+test('createApp fails fast when product image config is invalid', () => {
+  assert.throws(
+    () =>
+      createApp({
+        PRODUCT_IMAGE_ROOT: ' ',
+        PRODUCT_IMAGE_TMP_DIR: '/data/assets/uploads/tmp',
+        PRODUCT_IMAGE_ALLOWED_MIME: 'image/jpeg',
+      }),
+    /PRODUCT_IMAGE_ROOT/
+  )
+})

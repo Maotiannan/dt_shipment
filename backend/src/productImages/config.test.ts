@@ -43,3 +43,29 @@ test('rejects invalid numeric product image env values', () => {
     /PRODUCT_IMAGE_MAX_FILES/
   )
 })
+
+test('rejects blank product image path values and empty mime allow-lists', () => {
+  assert.throws(
+    () =>
+      loadProductImageConfig({
+        PRODUCT_IMAGE_ROOT: '   ',
+      }),
+    /PRODUCT_IMAGE_ROOT/
+  )
+
+  assert.throws(
+    () =>
+      loadProductImageConfig({
+        PRODUCT_IMAGE_TMP_DIR: '',
+      }),
+    /PRODUCT_IMAGE_TMP_DIR/
+  )
+
+  assert.throws(
+    () =>
+      loadProductImageConfig({
+        PRODUCT_IMAGE_ALLOWED_MIME: ' , ',
+      }),
+    /PRODUCT_IMAGE_ALLOWED_MIME/
+  )
+})

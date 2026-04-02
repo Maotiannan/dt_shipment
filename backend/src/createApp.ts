@@ -5,11 +5,14 @@ import express from 'express'
 import { appMeta } from './appMeta.js'
 import { pool } from './db.js'
 import { requireAuth, signToken, type AuthPayload } from './auth.js'
+import { loadProductImageConfig } from './productImages/config.js'
 
-export function createApp() {
+export function createApp(env: NodeJS.ProcessEnv = process.env) {
+  loadProductImageConfig(env)
+
   const app = express()
-  const ADMIN_USERNAME = process.env.ADMIN_USERNAME ?? 'admin'
-  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? '123456'
+  const ADMIN_USERNAME = env.ADMIN_USERNAME ?? 'admin'
+  const ADMIN_PASSWORD = env.ADMIN_PASSWORD ?? '123456'
 
   app.use(cors())
   app.use(express.json({ limit: '2mb' }))
@@ -49,7 +52,7 @@ export function createApp() {
     }
 
     const plain = ADMIN_PASSWORD
-    const hash = process.env.ADMIN_PASSWORD_HASH
+    const hash = env.ADMIN_PASSWORD_HASH
 
     const ok = hash ? await bcrypt.compare(password, hash) : password === plain
     if (!ok) return res.status(401).json({ error: '账号或密码错误' })
