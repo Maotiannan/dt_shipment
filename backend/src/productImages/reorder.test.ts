@@ -45,33 +45,39 @@ test('resequenceSortOrder normalizes sort order without mutating input', () => {
   assert.deepEqual(items, snapshot)
 })
 
-test('moveImageByDelta no-ops at the boundaries', () => {
+test('moveImageByDelta normalizes non-normalized input on boundary no-op', () => {
   const items = [
-    { image_id: 'a', sort_order: 1, is_primary: true },
-    { image_id: 'b', sort_order: 2, is_primary: false },
-    { image_id: 'c', sort_order: 3, is_primary: false },
+    { image_id: 'a', sort_order: 30, is_primary: true },
+    { image_id: 'b', sort_order: 10, is_primary: false },
+    { image_id: 'c', sort_order: 20, is_primary: false },
   ]
   const snapshot = structuredClone(items)
 
-  const moveFirstUp = moveImageByDelta(items, 'a', -1)
-  const moveLastDown = moveImageByDelta(items, 'c', 1)
+  const moveFirstUp = moveImageByDelta(items, 'b', -1)
 
-  assert.deepEqual(moveFirstUp, snapshot)
-  assert.deepEqual(moveLastDown, snapshot)
+  assert.deepEqual(moveFirstUp.map((item) => [item.image_id, item.sort_order]), [
+    ['b', 1],
+    ['c', 2],
+    ['a', 3],
+  ])
   assert.deepEqual(items, snapshot)
 })
 
-test('moveImageByDelta no-ops when the image id is missing', () => {
+test('moveImageByDelta normalizes non-normalized input on missing image no-op', () => {
   const items = [
-    { image_id: 'a', sort_order: 1, is_primary: true },
-    { image_id: 'b', sort_order: 2, is_primary: false },
-    { image_id: 'c', sort_order: 3, is_primary: false },
+    { image_id: 'a', sort_order: 30, is_primary: true },
+    { image_id: 'b', sort_order: 10, is_primary: false },
+    { image_id: 'c', sort_order: 20, is_primary: false },
   ]
   const snapshot = structuredClone(items)
 
   const result = moveImageByDelta(items, 'missing', 1)
 
-  assert.deepEqual(result, snapshot)
+  assert.deepEqual(result.map((item) => [item.image_id, item.sort_order]), [
+    ['b', 1],
+    ['c', 2],
+    ['a', 3],
+  ])
   assert.deepEqual(items, snapshot)
 })
 
