@@ -49,7 +49,11 @@ export function createProductImageRouter(env: NodeJS.ProcessEnv = process.env) {
     (req, res, next) => {
       upload.array('files', config.maxFiles)(req, res, (error) => {
         if (error) {
-          return res.status(400).json({ error: error.message })
+          if (error instanceof multer.MulterError) {
+            return res.status(400).json({ error: error.message })
+          }
+
+          return sendProductImageError(res, error)
         }
         return next()
       })

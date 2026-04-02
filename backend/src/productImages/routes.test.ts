@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -34,6 +34,7 @@ type RunningDatabase = {
 }
 
 let sharedRunningDatabase: RunningDatabase | null = null
+let appModulePool: Pool | null = null
 
 async function waitForDatabase(pool: Pool) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -139,6 +140,8 @@ async function listFilesRecursive(rootDir: string, currentDir = rootDir): Promis
 }
 
 test.after(async () => {
+  await appModulePool?.end().catch(() => undefined)
+
   if (sharedRunningDatabase) {
     await stopDisposablePostgres(sharedRunningDatabase)
   }
@@ -188,7 +191,11 @@ dbTest(
     const createAppModuleUrl = `${pathToFileURL(
       path.resolve(process.cwd(), 'src/createApp.ts')
     ).href}?routes-test=${Date.now()}`
-    const [{ createApp }] = await Promise.all([import(createAppModuleUrl)])
+    const [{ createApp }, { pool: canonicalPool }] = await Promise.all([
+      import(createAppModuleUrl),
+      import(pathToFileURL(path.resolve(process.cwd(), 'src/db.ts')).href),
+    ])
+    appModulePool = canonicalPool as Pool
 
     const app = createApp(process.env)
     server = createServer(app)
@@ -317,7 +324,11 @@ dbTest(
     const createAppModuleUrl = `${pathToFileURL(
       path.resolve(process.cwd(), 'src/createApp.ts')
     ).href}?routes-test-invalid=${Date.now()}`
-    const [{ createApp }] = await Promise.all([import(createAppModuleUrl)])
+    const [{ createApp }, { pool: canonicalPool }] = await Promise.all([
+      import(createAppModuleUrl),
+      import(pathToFileURL(path.resolve(process.cwd(), 'src/db.ts')).href),
+    ])
+    appModulePool = canonicalPool as Pool
 
     const app = createApp(process.env)
     server = createServer(app)
@@ -364,6 +375,139 @@ dbTest(
     })
 
     const uploadBody = await uploadRes.text()
+    assert.equal(uploadRes.status, 400, uploadBody)
+    assert.match(uploadBody, /valid image/i)
+
+    const persistedRows = await running.pool.query<{ count: string }>(
+      `select count(*)::text as count
+       from product_images
+       where sku_id = $1`,
+      [sku.sku_id]
+    )
+
+    assert.equal(Number(persistedRows.rows[0]?.count ?? '0'), 0)
+    assert.deepEqual(await listFilesRecursive(tempRoot), [])
+    assert.deepEqual(await readdir(tempUpload).catch(() => []), [])
+  }
+)
+
+dbTest(
+  'write failure during persist cleans files and rolls back rows',
+  { concurrency: false },
+  async (t) => {
+    const running = await getSharedRunningDatabase()
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'dt-shipment-images-root-'))
+    const tempUpload = await mkdtemp(path.join(os.tmpdir(), 'dt-shipment-images-tmp-'))
+    const originalEnv = {
+      PRODUCT_IMAGE_ROOT: process.env.PRODUCT_IMAGE_ROOT,
+      PRODUCT_IMAGE_TMP_DIR: process.env.PRODUCT_IMAGE_TMP_DIR,
+      PRODUCT_IMAGE_ALLOWED_MIME: process.env.PRODUCT_IMAGE_ALLOWED_MIME,
+    }
+
+    let server: ReturnType<typeof createServer> | null = null
+
+    t.after(async () => {
+      server?.close()
+      await rm(tempRoot, { recursive: true, force: true })
+      await rm(tempUpload, { recursive: true, force: true })
+
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) {
+          delete process.env[key]
+        } else {
+          process.env[key] = value
+        }
+      }
+    })
+
+    process.env.PRODUCT_IMAGE_ROOT = tempRoot
+    process.env.PRODUCT_IMAGE_TMP_DIR = tempUpload
+    process.env.PRODUCT_IMAGE_ALLOWED_MIME = 'image/jpeg,image/png,image/webp'
+
+    const createAppModuleUrl = `${pathToFileURL(
+      path.resolve(process.cwd(), 'src/createApp.ts')
+    ).href}?routes-test-write-failure=${Date.now()}`
+    const [{ createApp }, { pool: canonicalPool }, { productImageFileIo }] = await Promise.all([
+      import(createAppModuleUrl),
+      import(pathToFileURL(path.resolve(process.cwd(), 'src/db.ts')).href),
+      import(pathToFileURL(path.resolve(process.cwd(), 'src/productImages/fileStore.ts')).href),
+    ])
+    appModulePool = canonicalPool as Pool
+
+    const app = createApp(process.env)
+    server = createServer(app)
+    server.listen(0)
+    await once(server, 'listening')
+
+    const { port } = server.address() as { port: number }
+    const loginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: '123456' }),
+    })
+
+    assert.equal(loginRes.status, 200)
+    const login = (await loginRes.json()) as { token: string }
+
+    const skuRes = await fetch(`http://127.0.0.1:${port}/api/skus`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${login.token}`,
+      },
+      body: JSON.stringify({
+        sku_code: `TEST-WRITE-${Date.now()}`,
+        name: 'Write failure product',
+        spec: '写失败测试',
+        unit_price: 1,
+        category: 'test',
+        status: 'active',
+      }),
+    })
+
+    assert.equal(skuRes.status, 200)
+    const sku = (await skuRes.json()) as { sku_id: string }
+
+    type WriteFileFn = typeof productImageFileIo.writeFile
+    const realWriteFile: WriteFileFn = productImageFileIo.writeFile
+    let originalWriteCompleted = false
+
+    t.mock.method(
+      productImageFileIo,
+      'writeFile',
+      async (
+        target: Parameters<WriteFileFn>[0],
+        data: Parameters<WriteFileFn>[1],
+        options?: Parameters<WriteFileFn>[2]
+      ) => {
+        const targetPath = String(target)
+        if (targetPath.endsWith('.png')) {
+          const result = await realWriteFile(target, data, options)
+          originalWriteCompleted = true
+          return result
+        }
+
+        if (targetPath.endsWith('.jpg')) {
+          for (let attempt = 0; attempt < 20 && !originalWriteCompleted; attempt += 1) {
+            await delay(10)
+          }
+          throw new Error('simulated thumb write failure')
+        }
+
+        return realWriteFile(target, data, options)
+      }
+    )
+
+    const form = new FormData()
+    form.append('files', new Blob([tinyPng], { type: 'image/png' }), 'cover.png')
+
+    const uploadRes = await fetch(`http://127.0.0.1:${port}/api/skus/${sku.sku_id}/images`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${login.token}` },
+      body: form,
+    })
+
+    const uploadBody = await uploadRes.text()
     assert.equal(uploadRes.status, 500, uploadBody)
 
     const persistedRows = await running.pool.query<{ count: string }>(
@@ -376,5 +520,101 @@ dbTest(
     assert.equal(Number(persistedRows.rows[0]?.count ?? '0'), 0)
     assert.deepEqual(await listFilesRecursive(tempRoot), [])
     assert.deepEqual(await readdir(tempUpload).catch(() => []), [])
+  }
+)
+
+dbTest(
+  'tmp dir infrastructure failure returns 500',
+  { concurrency: false },
+  async (t) => {
+    const running = await getSharedRunningDatabase()
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'dt-shipment-images-root-'))
+    const tempUploadRoot = await mkdtemp(path.join(os.tmpdir(), 'dt-shipment-images-tmp-parent-'))
+    const tempUploadFile = path.join(tempUploadRoot, 'not-a-directory')
+    const originalEnv = {
+      PRODUCT_IMAGE_ROOT: process.env.PRODUCT_IMAGE_ROOT,
+      PRODUCT_IMAGE_TMP_DIR: process.env.PRODUCT_IMAGE_TMP_DIR,
+      PRODUCT_IMAGE_ALLOWED_MIME: process.env.PRODUCT_IMAGE_ALLOWED_MIME,
+    }
+
+    let server: ReturnType<typeof createServer> | null = null
+
+    t.after(async () => {
+      server?.close()
+      await rm(tempRoot, { recursive: true, force: true })
+      await rm(tempUploadRoot, { recursive: true, force: true })
+
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) {
+          delete process.env[key]
+        } else {
+          process.env[key] = value
+        }
+      }
+    })
+
+    await writeFile(tempUploadFile, 'occupied')
+
+    process.env.PRODUCT_IMAGE_ROOT = tempRoot
+    process.env.PRODUCT_IMAGE_TMP_DIR = tempUploadFile
+    process.env.PRODUCT_IMAGE_ALLOWED_MIME = 'image/jpeg,image/png,image/webp'
+
+    const createAppModuleUrl = `${pathToFileURL(
+      path.resolve(process.cwd(), 'src/createApp.ts')
+    ).href}?routes-test-tmp-failure=${Date.now()}`
+    const [{ createApp }, { pool: canonicalPool }] = await Promise.all([
+      import(createAppModuleUrl),
+      import(pathToFileURL(path.resolve(process.cwd(), 'src/db.ts')).href),
+    ])
+    appModulePool = canonicalPool as Pool
+
+    const app = createApp(process.env)
+    server = createServer(app)
+    server.listen(0)
+    await once(server, 'listening')
+
+    const { port } = server.address() as { port: number }
+    const loginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: '123456' }),
+    })
+
+    assert.equal(loginRes.status, 200)
+    const login = (await loginRes.json()) as { token: string }
+
+    const skuRes = await fetch(`http://127.0.0.1:${port}/api/skus`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${login.token}`,
+      },
+      body: JSON.stringify({
+        sku_code: `TEST-TMP-${Date.now()}`,
+        name: 'Tmp failure product',
+        spec: 'tmp目录失败测试',
+        unit_price: 1,
+        category: 'test',
+        status: 'active',
+      }),
+    })
+
+    assert.equal(skuRes.status, 200)
+    const sku = (await skuRes.json()) as { sku_id: string }
+
+    const form = new FormData()
+    form.append('files', new Blob([tinyPng], { type: 'image/png' }), 'cover.png')
+
+    const uploadRes = await fetch(`http://127.0.0.1:${port}/api/skus/${sku.sku_id}/images`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${login.token}` },
+      body: form,
+    })
+
+    const uploadBody = await uploadRes.text()
+    assert.equal(uploadRes.status, 500, uploadBody)
+    assert.match(uploadBody, /exist|directory|mkdir/i)
+    assert.deepEqual(await listFilesRecursive(tempRoot), [])
+    assert.equal(running.pool.options.database, 'dt_ship_manager')
   }
 )

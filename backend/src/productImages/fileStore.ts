@@ -23,6 +23,13 @@ export class InvalidProductImageFileError extends Error {
   }
 }
 
+export const productImageFileIo = {
+  readFile: fs.readFile.bind(fs),
+  writeFile: fs.writeFile.bind(fs),
+  mkdir: fs.mkdir.bind(fs),
+  rm: fs.rm.bind(fs),
+}
+
 function fileExtensionFromMime(mimeType: string) {
   if (mimeType === 'image/png') return '.png'
   if (mimeType === 'image/webp') return '.webp'
@@ -54,7 +61,7 @@ export async function persistProductImage(
   const thumbRelpath = path.posix.join('thumb', params.skuId, `${params.imageId}.jpg`)
   const originalAbsPath = resolveWithinRoot(config.rootDir, originalRelpath)
   const thumbAbsPath = resolveWithinRoot(config.rootDir, thumbRelpath)
-  const fileBuffer = await fs.readFile(params.sourcePath)
+  const fileBuffer = await productImageFileIo.readFile(params.sourcePath)
   let metadata: sharp.Metadata
   let thumbBuffer: Buffer
 
@@ -68,13 +75,13 @@ export async function persistProductImage(
     throw new InvalidProductImageFileError()
   }
 
-  await fs.mkdir(path.dirname(originalAbsPath), { recursive: true })
-  await fs.mkdir(path.dirname(thumbAbsPath), { recursive: true })
+  await productImageFileIo.mkdir(path.dirname(originalAbsPath), { recursive: true })
+  await productImageFileIo.mkdir(path.dirname(thumbAbsPath), { recursive: true })
 
   try {
     await Promise.all([
-      fs.writeFile(originalAbsPath, fileBuffer),
-      fs.writeFile(thumbAbsPath, thumbBuffer),
+      productImageFileIo.writeFile(originalAbsPath, fileBuffer),
+      productImageFileIo.writeFile(thumbAbsPath, thumbBuffer),
     ])
   } catch (error) {
     await removePersistedProductImage({ originalAbsPath, thumbAbsPath }).catch(() => undefined)
@@ -100,7 +107,7 @@ export async function readStoredProductImage(
 ) {
   const config = loadProductImageConfig(env)
   const absolutePath = resolveWithinRoot(config.rootDir, relpath)
-  return fs.readFile(absolutePath)
+  return productImageFileIo.readFile(absolutePath)
 }
 
 export async function removePersistedProductImage(paths: {
@@ -108,7 +115,7 @@ export async function removePersistedProductImage(paths: {
   thumbAbsPath?: string
 }) {
   await Promise.all([
-    paths.originalAbsPath ? fs.rm(paths.originalAbsPath, { force: true }) : Promise.resolve(),
-    paths.thumbAbsPath ? fs.rm(paths.thumbAbsPath, { force: true }) : Promise.resolve(),
+    paths.originalAbsPath ? productImageFileIo.rm(paths.originalAbsPath, { force: true }) : Promise.resolve(),
+    paths.thumbAbsPath ? productImageFileIo.rm(paths.thumbAbsPath, { force: true }) : Promise.resolve(),
   ])
 }
