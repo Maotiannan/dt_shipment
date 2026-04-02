@@ -6,6 +6,7 @@ import { appMeta } from './appMeta.js'
 import { pool } from './db.js'
 import { requireAuth, signToken, type AuthPayload } from './auth.js'
 import { loadProductImageConfig } from './productImages/config.js'
+import { createProductImageRouter } from './productImages/routes.js'
 
 export function createApp(env: NodeJS.ProcessEnv = process.env) {
   loadProductImageConfig(env)
@@ -16,6 +17,7 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
 
   app.use(cors())
   app.use(express.json({ limit: '2mb' }))
+  app.use(createProductImageRouter(env))
 
   app.get('/api/meta', (_req, res) => {
     res.json({
