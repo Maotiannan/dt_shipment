@@ -45,6 +45,22 @@ test('resequenceSortOrder normalizes sort order without mutating input', () => {
   assert.deepEqual(items, snapshot)
 })
 
+test('resequenceSortOrder resolves duplicate sort orders deterministically', () => {
+  const items = [
+    { image_id: 'c', sort_order: 2, is_primary: false },
+    { image_id: 'a', sort_order: 1, is_primary: true },
+    { image_id: 'b', sort_order: 2, is_primary: false },
+  ]
+
+  const result = resequenceSortOrder(items)
+
+  assert.deepEqual(result.map((item) => [item.image_id, item.sort_order]), [
+    ['a', 1],
+    ['b', 2],
+    ['c', 3],
+  ])
+})
+
 test('moveImageByDelta normalizes non-normalized input on boundary no-op', () => {
   const items = [
     { image_id: 'a', sort_order: 30, is_primary: true },

@@ -107,7 +107,8 @@ with normalized_active_images as (
 update product_images as target
 set sort_order = normalized_active_images.next_sort_order
 from normalized_active_images
-where target.image_id = normalized_active_images.image_id;
+where target.image_id = normalized_active_images.image_id
+  and target.sort_order is distinct from normalized_active_images.next_sort_order;
 
 with collapsed_active_primaries as (
   select
@@ -124,14 +125,10 @@ set is_primary = false
 from collapsed_active_primaries
 where target.image_id = collapsed_active_primaries.image_id
   and collapsed_active_primaries.primary_rank > 1;
-
-drop index if exists product_images_sku_sort_idx;
-create unique index if not exists product_images_sku_sort_idx
+create unique index if not exists product_images_active_sku_sort_uidx
   on product_images(sku_id, sort_order)
   where status = 'active';
-
-drop index if exists product_images_primary_idx;
-create unique index if not exists product_images_primary_idx
+create unique index if not exists product_images_active_primary_uidx
   on product_images(sku_id)
   where status = 'active' and is_primary;
 

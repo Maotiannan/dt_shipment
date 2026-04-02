@@ -2,7 +2,10 @@ type ImageOrder = { image_id: string; sort_order: number; is_primary: boolean }
 
 export function resequenceSortOrder(items: ImageOrder[]) {
   return [...items]
-    .sort((left, right) => left.sort_order - right.sort_order)
+    .sort(
+      (left, right) =>
+        left.sort_order - right.sort_order || left.image_id.localeCompare(right.image_id)
+    )
     .map((item, index) => ({ ...item, sort_order: index + 1 }))
 }
 
