@@ -75,12 +75,15 @@ create table if not exists product_images (
   updated_at timestamptz not null default now()
 );
 
-create index if not exists product_images_sku_sort_idx
-  on product_images(sku_id, sort_order);
-
-create index if not exists product_images_primary_idx
-  on product_images(sku_id, is_primary)
+drop index if exists product_images_sku_sort_idx;
+create unique index if not exists product_images_sku_sort_idx
+  on product_images(sku_id, sort_order)
   where status = 'active';
+
+drop index if exists product_images_primary_idx;
+create unique index if not exists product_images_primary_idx
+  on product_images(sku_id)
+  where status = 'active' and is_primary;
 
 create index if not exists product_images_status_idx
   on product_images(status, deleted_at);
