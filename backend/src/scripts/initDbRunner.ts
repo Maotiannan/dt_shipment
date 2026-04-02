@@ -1022,13 +1022,13 @@ export async function runInitDb(pool: InitDbPool, schemaSql: string) {
     await client.query('create extension if not exists pgcrypto;')
     await client.query(schemaSql)
 
+    await dropNonCanonicalProductImageIndexes(client)
+
     const schemaRepairNeed = await detectProductImageSchemaRepairNeed(client)
 
     if (needsProductImageSchemaRepair(schemaRepairNeed)) {
       await repairProductImageSchema(client, schemaRepairNeed)
     }
-
-    await dropNonCanonicalProductImageIndexes(client)
 
     const repairNeed = await detectProductImageRepairNeed(client)
 

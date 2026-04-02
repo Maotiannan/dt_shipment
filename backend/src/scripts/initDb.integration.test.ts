@@ -156,7 +156,7 @@ async function seedLegacyDuplicateState(pool: Pool, includeLegacyIndexes: boolea
       width integer not null,
       height integer not null,
       sha256 text not null,
-      sort_order integer not null,
+      sort_order integer,
       is_primary boolean not null default false,
       status text not null default 'active',
       created_at timestamptz not null default now(),
@@ -212,7 +212,7 @@ async function seedGappedNoPrimaryState(pool: Pool) {
       width integer not null,
       height integer not null,
       sha256 text not null,
-      sort_order integer not null,
+      sort_order integer,
       is_primary boolean not null default false,
       status text not null default 'active',
       created_at timestamptz not null default now(),
@@ -318,7 +318,7 @@ async function seedMixedDriftProductImageState(pool: Pool) {
       width integer not null,
       height integer not null,
       sha256 text not null,
-      sort_order integer not null,
+      sort_order integer,
       is_primary boolean not null default false,
       status text not null default 'active',
       deleted_at timestamptz,
@@ -339,7 +339,7 @@ async function seedMixedDriftProductImageState(pool: Pool) {
       sort_order, is_primary, status, deleted_at, created_at, updated_at
     ) values
       ('dddddddd-dddd-dddd-dddd-dddddddddddd', '77777777-7777-7777-7777-777777777777', 'mixed/d', 'd', 'd', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-d', 1, false, 'deleted', '2026-04-01 08:00:00+00', '2026-04-01 08:00:00+00', '2026-04-01 08:00:00+00'),
-      ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '77777777-7777-7777-7777-777777777777', 'mixed/a', 'a', 'a', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-a', 2, false, 'active',  null, '2026-04-01 08:01:00+00', '2026-04-01 08:01:00+00'),
+      ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '77777777-7777-7777-7777-777777777777', 'mixed/a', 'a', 'a', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-a', null, false, 'active',  null, '2026-04-01 08:01:00+00', '2026-04-01 08:01:00+00'),
       ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '77777777-7777-7777-7777-777777777777', 'mixed/b', 'b', 'b', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-b', 3, true,  'active',  null, '2026-04-01 08:02:00+00', '2026-04-01 08:02:00+00');
   `)
 
