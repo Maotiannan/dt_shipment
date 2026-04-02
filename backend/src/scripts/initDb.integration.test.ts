@@ -296,6 +296,86 @@ async function seedWrongDefinitionProductImageIndexes(pool: Pool) {
   `)
 }
 
+async function seedMixedDriftProductImageState(pool: Pool) {
+  await pool.query(`
+    create table if not exists skus (
+      sku_id uuid primary key,
+      name text not null,
+      status text not null default 'active'
+    );
+  `)
+
+  await pool.query(`
+    create table if not exists product_images (
+      image_id uuid primary key,
+      sku_id uuid not null references skus(sku_id) on delete cascade,
+      storage_key text not null unique,
+      original_relpath text not null,
+      thumb_relpath text not null,
+      mime_type text not null,
+      file_ext text not null,
+      file_size bigint not null,
+      width integer not null,
+      height integer not null,
+      sha256 text not null,
+      sort_order integer not null,
+      is_primary boolean not null default false,
+      status text not null default 'active',
+      deleted_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+  `)
+
+  await pool.query(`
+    insert into skus (sku_id, name)
+    values ('77777777-7777-7777-7777-777777777777', 'mixed drift sku');
+  `)
+
+  await pool.query(`
+    insert into product_images (
+      image_id, sku_id, storage_key, original_relpath, thumb_relpath,
+      mime_type, file_ext, file_size, width, height, sha256,
+      sort_order, is_primary, status, deleted_at, created_at, updated_at
+    ) values
+      ('dddddddd-dddd-dddd-dddd-dddddddddddd', '77777777-7777-7777-7777-777777777777', 'mixed/d', 'd', 'd', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-d', 1, false, 'deleted', '2026-04-01 08:00:00+00', '2026-04-01 08:00:00+00', '2026-04-01 08:00:00+00'),
+      ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '77777777-7777-7777-7777-777777777777', 'mixed/a', 'a', 'a', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-a', 2, false, 'active',  null, '2026-04-01 08:01:00+00', '2026-04-01 08:01:00+00'),
+      ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '77777777-7777-7777-7777-777777777777', 'mixed/b', 'b', 'b', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-b', 3, true,  'active',  null, '2026-04-01 08:02:00+00', '2026-04-01 08:02:00+00');
+  `)
+
+  await pool.query(`
+    create unique index product_images_active_sku_sort_uidx
+      on product_images(sku_id, sort_order);
+  `)
+}
+
+async function seedExtraClausesProductImageIndexes(pool: Pool) {
+  await seedWrongPrimaryState(pool)
+
+  await pool.query(`
+    alter table product_images
+      add column if not exists deleted_at timestamptz;
+  `)
+
+  await pool.query(`
+    create unique index product_images_active_sku_sort_uidx
+      on product_images(sku_id, sort_order) include (image_id)
+      where status = 'active';
+  `)
+
+  await pool.query(`
+    create unique index product_images_active_primary_uidx
+      on product_images(sku_id)
+      where status = 'active' and is_primary and deleted_at is null;
+  `)
+
+  await pool.query(`
+    create index product_images_status_idx
+      on product_images(status, deleted_at)
+      where status = 'active';
+  `)
+}
+
 async function seedPartialProductImagesCompositeUniqueState(pool: Pool) {
   await seedPartialProductImagesTable(pool)
 
@@ -729,6 +809,66 @@ dbTest('db:init leaves product_images convergence no-op on clean steady-state bo
     )
     assert.ok(statusIndexDef.includes('on public.product_images using btree (status, deleted_at)'))
     assert.equal(statusIndexDef.includes('unique'), false)
+  })
+
+  await withDisposablePostgres(async (pool) => {
+    await seedMixedDriftProductImageState(pool)
+    await runInitDb(pool, schemaSql)
+
+    const activeRows = await pool.query<{
+      image_id: string
+      sort_order: number
+      is_primary: boolean
+    }>(`
+      select image_id, sort_order, is_primary
+      from product_images
+      where sku_id = '77777777-7777-7777-7777-777777777777'
+        and status = 'active'
+      order by sort_order, image_id
+    `)
+
+    assert.deepEqual(activeRows.rows, [
+      {
+        image_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        sort_order: 1,
+        is_primary: true,
+      },
+      {
+        image_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        sort_order: 2,
+        is_primary: false,
+      },
+    ])
+  })
+
+  await withDisposablePostgres(async (pool) => {
+    await seedExtraClausesProductImageIndexes(pool)
+    await runInitDb(pool, schemaSql)
+
+    const indexDefinitions = await readProductImageIndexDefinitions(pool)
+    const activePrimaryIndexDef = normalizeIndexDefinition(
+      indexDefinitions.product_images_active_primary_uidx
+    )
+    const activeSkuSortIndexDef = normalizeIndexDefinition(
+      indexDefinitions.product_images_active_sku_sort_uidx
+    )
+    const statusIndexDef = normalizeIndexDefinition(indexDefinitions.product_images_status_idx)
+
+    assert.equal(activePrimaryIndexDef.includes('deleted_at is null'), false)
+    assert.equal(activePrimaryIndexDef.includes('include ('), false)
+    assert.equal(activeSkuSortIndexDef.includes('include ('), false)
+    assert.equal(statusIndexDef.includes('where ('), false)
+    assert.ok(
+      activePrimaryIndexDef.includes(
+        'where ((status = \'active\'::text) and is_primary)'
+      )
+    )
+    assert.ok(
+      activeSkuSortIndexDef.includes(
+        'where (status = \'active\'::text)'
+      )
+    )
+    assert.ok(statusIndexDef.includes('on public.product_images using btree (status, deleted_at)'))
   })
 
   await withDisposablePostgres(async (pool) => {

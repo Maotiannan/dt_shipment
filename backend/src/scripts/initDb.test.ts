@@ -27,6 +27,48 @@ function makePool(scenario: Scenario) {
     tableCount: scenario.tableCount,
   }
 
+  function buildCanonicalIndexState(indexname: string) {
+    if (indexname === 'product_images_active_sku_sort_uidx') {
+      return {
+        indexname,
+        access_method: 'btree',
+        is_unique: true,
+        key_att_count: 2,
+        total_att_count: 2,
+        has_expressions: false,
+        reloptions: [],
+        predicate_sql: "(status = 'active'::text)",
+        key_columns: ['sku_id', 'sort_order'],
+      }
+    }
+
+    if (indexname === 'product_images_active_primary_uidx') {
+      return {
+        indexname,
+        access_method: 'btree',
+        is_unique: true,
+        key_att_count: 1,
+        total_att_count: 1,
+        has_expressions: false,
+        reloptions: [],
+        predicate_sql: "((status = 'active'::text) and is_primary)",
+        key_columns: ['sku_id'],
+      }
+    }
+
+    return {
+      indexname,
+      access_method: 'btree',
+      is_unique: false,
+      key_att_count: 2,
+      total_att_count: 2,
+      has_expressions: false,
+      reloptions: [],
+      predicate_sql: null,
+      key_columns: ['status', 'deleted_at'],
+    }
+  }
+
   return {
     queries,
     get state() {
@@ -113,6 +155,12 @@ function makePool(scenario: Scenario) {
         normalized.includes("from pg_indexes") &&
         normalized.includes("product_images_active_sku_sort_uidx")
       ) {
+        if (normalized.includes('access_method.amname as access_method')) {
+          return {
+            rows: state.currentIndexNames.map((indexname) => buildCanonicalIndexState(indexname)),
+          }
+        }
+
         if (normalized.includes('indexdef')) {
           return {
             rows: state.currentIndexNames.map((indexname) => ({

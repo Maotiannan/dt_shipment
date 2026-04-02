@@ -29,27 +29,21 @@ create index if not exists product_images_status_idx
 const PRODUCT_IMAGE_CANONICAL_INDEX_SPECS = [
   {
     indexName: 'product_images_active_sku_sort_uidx',
-    expectedTokens: [
-      'create unique index product_images_active_sku_sort_uidx',
-      'on product_images using btree (sku_id, sort_order)',
-      "where (status = 'active'::text)",
-    ],
+    isUnique: true,
+    keyColumns: ['sku_id', 'sort_order'],
+    predicateSql: "(status = 'active'::text)",
   },
   {
     indexName: 'product_images_active_primary_uidx',
-    expectedTokens: [
-      'create unique index product_images_active_primary_uidx',
-      'on product_images using btree (sku_id)',
-      "where ((status = 'active'::text) and is_primary)",
-    ],
+    isUnique: true,
+    keyColumns: ['sku_id'],
+    predicateSql: "((status = 'active'::text) and is_primary)",
   },
   {
     indexName: 'product_images_status_idx',
-    expectedTokens: [
-      'create index product_images_status_idx',
-      'on product_images using btree (status, deleted_at)',
-    ],
-    forbiddenTokens: ['unique'],
+    isUnique: false,
+    keyColumns: ['status', 'deleted_at'],
+    predicateSql: null,
   },
 ] as const
 
@@ -186,9 +180,38 @@ const CURRENT_PRODUCT_IMAGE_INDEX_SQL = `
     )
 `
 
-const PRODUCT_IMAGE_INDEX_DEFINITIONS_SQL = `
-  select indexname, indexdef
+const PRODUCT_IMAGE_INDEX_STATE_SQL = `
+  select
+    index_row.relname as indexname,
+    access_method.amname as access_method,
+    index_info.indisunique as is_unique,
+    index_info.indnkeyatts as key_att_count,
+    index_info.indnatts as total_att_count,
+    index_info.indexprs is not null as has_expressions,
+    coalesce(index_row.reloptions, '{}'::text[]) as reloptions,
+    pg_get_expr(index_info.indpred, index_info.indrelid) as predicate_sql,
+    coalesce(
+      array(
+        select pg_get_indexdef(index_row.oid, key_ordinality, false)
+        from generate_series(1, index_info.indnkeyatts) as key_ordinality
+        order by key_ordinality
+      ),
+      '{}'::text[]
+    ) as key_columns
   from pg_indexes
+  join pg_class table_row
+    on table_row.relname = tablename
+  join pg_namespace namespace_row
+    on namespace_row.oid = table_row.relnamespace
+   and namespace_row.nspname = schemaname
+  join pg_class index_row
+    on index_row.relname = indexname
+   and index_row.relnamespace = namespace_row.oid
+  join pg_index index_info
+    on index_info.indexrelid = index_row.oid
+   and index_info.indrelid = table_row.oid
+  join pg_am access_method
+    on access_method.oid = index_row.relam
   where schemaname = current_schema()
     and tablename = 'product_images'
     and indexname in (
@@ -317,6 +340,18 @@ type ProductImageKeyConflicts = {
   hasDuplicateStorageKeys: boolean
 }
 
+type ProductImageIndexState = {
+  indexname: string
+  access_method: string
+  is_unique: boolean
+  key_att_count: number
+  total_att_count: number
+  has_expressions: boolean
+  reloptions: string[]
+  predicate_sql: string | null
+  key_columns: string[]
+}
+
 const PRODUCT_IMAGE_NOT_NULL_COLUMNS = [
   'image_id',
   'sku_id',
@@ -440,39 +475,61 @@ async function hasProductImageKeyConflicts(pool: InitDbPool) {
   return conflicts
 }
 
-function normalizeIndexDefinition(indexDefinition: string) {
-  return indexDefinition.replace(/\s+/g, ' ').trim().toLowerCase()
+function normalizeSqlFragment(sql: string | null) {
+  return sql ? sql.replace(/\s+/g, ' ').trim().toLowerCase() : null
 }
 
-function hasCanonicalIndexShape(indexName: string, indexDefinition: string | undefined) {
-  if (!indexDefinition) {
+async function getProductImageIndexStates(pool: InitDbPool) {
+  const result = await pool.query(PRODUCT_IMAGE_INDEX_STATE_SQL)
+  return result.rows.map((row) => ({
+    indexname: String(row.indexname),
+    access_method: String(row.access_method),
+    is_unique: Boolean(row.is_unique),
+    key_att_count: Number(row.key_att_count),
+    total_att_count: Number(row.total_att_count),
+    has_expressions: Boolean(row.has_expressions),
+    reloptions: Array.isArray(row.reloptions)
+      ? row.reloptions.map((item) => String(item))
+      : [],
+    predicate_sql: row.predicate_sql === null ? null : String(row.predicate_sql),
+    key_columns: Array.isArray(row.key_columns)
+      ? row.key_columns.map((item) => String(item))
+      : [],
+  })) as ProductImageIndexState[]
+}
+
+function hasCanonicalIndexShape(indexState: ProductImageIndexState | undefined) {
+  if (!indexState) {
     return false
   }
 
-  const normalized = normalizeIndexDefinition(indexDefinition).replace(/public\./g, '')
-  const spec = PRODUCT_IMAGE_CANONICAL_INDEX_SPECS.find((candidate) => candidate.indexName === indexName)
+  const spec = PRODUCT_IMAGE_CANONICAL_INDEX_SPECS.find(
+    (candidate) => candidate.indexName === indexState.indexname
+  )
 
   if (!spec) {
     return false
   }
 
-  const hasAllExpectedTokens = spec.expectedTokens.every((token) => normalized.includes(token))
-  const hasForbiddenTokens =
-    'forbiddenTokens' in spec
-      ? spec.forbiddenTokens.some((token: string) => normalized.includes(token))
-      : false
-
-  return hasAllExpectedTokens && !hasForbiddenTokens
+  return (
+    indexState.access_method === 'btree' &&
+    indexState.is_unique === spec.isUnique &&
+    indexState.key_att_count === spec.keyColumns.length &&
+    indexState.total_att_count === spec.keyColumns.length &&
+    indexState.has_expressions === false &&
+    indexState.reloptions.length === 0 &&
+    indexState.key_columns.length === spec.keyColumns.length &&
+    indexState.key_columns.every((columnName, index) => columnName === spec.keyColumns[index]) &&
+    normalizeSqlFragment(indexState.predicate_sql) === normalizeSqlFragment(spec.predicateSql)
+  )
 }
 
 async function hasCanonicalProductImageIndexes(pool: InitDbPool) {
-  const result = await pool.query(PRODUCT_IMAGE_INDEX_DEFINITIONS_SQL)
-  const definitions = new Map(
-    result.rows.map((row) => [String(row.indexname), String(row.indexdef)] as const)
-  )
+  const states = await getProductImageIndexStates(pool)
+  const stateMap = new Map(states.map((state) => [state.indexname, state]))
 
   return PRODUCT_IMAGE_CANONICAL_INDEX_SPECS.every((spec) =>
-    hasCanonicalIndexShape(spec.indexName, definitions.get(spec.indexName))
+    hasCanonicalIndexShape(stateMap.get(spec.indexName))
   )
 }
 
@@ -866,18 +923,26 @@ async function repairProductImageSchema(pool: InitDbPool, preflight: ProductImag
   }
 }
 
-async function repairProductImageIndexes(pool: InitDbPool) {
-  const result = await pool.query(PRODUCT_IMAGE_INDEX_DEFINITIONS_SQL)
-  const definitions = new Map(
-    result.rows.map((row) => [String(row.indexname), String(row.indexdef)] as const)
-  )
+async function dropNonCanonicalProductImageIndexes(pool: InitDbPool) {
+  const states = await getProductImageIndexStates(pool)
 
-  for (const spec of PRODUCT_IMAGE_CANONICAL_INDEX_SPECS) {
-    if (hasCanonicalIndexShape(spec.indexName, definitions.get(spec.indexName))) {
+  for (const state of states) {
+    if (hasCanonicalIndexShape(state)) {
       continue
     }
 
-    await pool.query(`drop index if exists ${spec.indexName};`)
+    await pool.query(`drop index if exists ${state.indexname};`)
+  }
+}
+
+async function repairProductImageIndexes(pool: InitDbPool) {
+  const states = await getProductImageIndexStates(pool)
+  const stateMap = new Map(states.map((state) => [state.indexname, state]))
+
+  for (const spec of PRODUCT_IMAGE_CANONICAL_INDEX_SPECS) {
+    if (hasCanonicalIndexShape(stateMap.get(spec.indexName))) {
+      continue
+    }
 
     if (spec.indexName === 'product_images_active_sku_sort_uidx') {
       await pool.query(PRODUCT_IMAGE_ACTIVE_SKU_SORT_INDEX_SQL)
@@ -962,6 +1027,8 @@ export async function runInitDb(pool: InitDbPool, schemaSql: string) {
     if (needsProductImageSchemaRepair(schemaRepairNeed)) {
       await repairProductImageSchema(client, schemaRepairNeed)
     }
+
+    await dropNonCanonicalProductImageIndexes(client)
 
     const repairNeed = await detectProductImageRepairNeed(client)
 
