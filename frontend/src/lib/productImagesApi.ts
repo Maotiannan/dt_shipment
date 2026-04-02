@@ -37,6 +37,10 @@ type ProductSkuDetailResponse = Omit<ProductSkuDetail, 'images'> & {
   >
 }
 
+type ProductImagesResponse = {
+  images?: ProductSkuDetailResponse['images']
+}
+
 function buildUrl(path: string) {
   return `${API_BASE}${path}`
 }
@@ -99,11 +103,15 @@ function normalizeDetailImage(
   }
 }
 
+function normalizeProductImages(
+  images: ProductSkuDetailResponse['images'] | undefined
+): ProductImageSummary[] {
+  return normalizeProductImageState((images ?? []).map((image) => normalizeDetailImage(image)))
+}
+
 export async function loadProductSkuDetail(skuId: string): Promise<ProductSkuDetail> {
   const data = await authenticatedJson<ProductSkuDetailResponse>(`/api/skus/${skuId}`)
-  const images = normalizeProductImageState(
-    (data.images ?? []).map((image) => normalizeDetailImage(image))
-  )
+  const images = normalizeProductImages(data.images)
 
   return {
     ...data,
@@ -126,20 +134,23 @@ export async function uploadProductSkuImages(skuId: string, files: File[] | File
 }
 
 export async function setProductSkuPrimaryImage(skuId: string, imageId: string) {
-  await authenticatedFetch(`/api/skus/${skuId}/images/${imageId}/primary`, {
-    method: 'PATCH',
-  })
+  const data = await authenticatedJson<ProductImagesResponse>(
+    `/api/skus/${skuId}/images/${imageId}/primary`,
+    {
+      method: 'PATCH',
+    }
+  )
 
-  return loadProductSkuDetail(skuId)
+  return normalizeProductImages(data.images)
 }
 
 export async function reorderProductSkuImages(skuId: string, imageIds: string[]) {
-  await authenticatedJson(`/api/skus/${skuId}/images/reorder`, {
+  const data = await authenticatedJson<ProductImagesResponse>(`/api/skus/${skuId}/images/reorder`, {
     method: 'PATCH',
     body: JSON.stringify({ imageIds }),
   })
 
-  return loadProductSkuDetail(skuId)
+  return normalizeProductImages(data.images)
 }
 
 export async function deleteProductSkuImage(skuId: string, imageId: string) {

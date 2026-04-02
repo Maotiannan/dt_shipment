@@ -41,6 +41,10 @@ export function normalizeProductImageState<T extends ProductImageStateItem>(item
   return normalizeWithPrimary(items, null)
 }
 
+export function getPrimaryProductImage<T extends ProductImageStateItem>(items: T[]) {
+  return normalizeProductImageState(items).find((item) => item.is_primary) ?? null
+}
+
 export function moveProductImage<T extends ProductImageStateItem>(
   items: T[],
   imageId: string,

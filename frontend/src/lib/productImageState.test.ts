@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  getPrimaryProductImage,
   moveProductImage,
   normalizeProductImageState,
   removeProductImage,
@@ -139,4 +140,25 @@ test('setPrimaryProductImage keeps the selected image first in the primary order
       ['img-b', 2, true],
     ]
   )
+})
+
+test('getPrimaryProductImage returns the normalized primary image', () => {
+  const result = getPrimaryProductImage([
+    {
+      image_id: 'img-b',
+      sort_order: 2,
+      is_primary: true,
+      status: 'active',
+      deleted_at: null,
+    },
+    {
+      image_id: 'img-a',
+      sort_order: 1,
+      is_primary: false,
+      status: 'active',
+      deleted_at: null,
+    },
+  ])
+
+  assert.equal(result?.image_id, 'img-b')
 })

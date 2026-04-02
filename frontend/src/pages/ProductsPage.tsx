@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiRequest } from '../lib/apiClient'
-import { fetchProtectedImageObjectUrl } from '../lib/productImagesApi'
+import { fetchProtectedImageObjectUrl, type ProductImageSummary } from '../lib/productImagesApi'
+import { getPrimaryProductImage } from '../lib/productImageState'
 import ProductImageManager from '../components/ProductImageManager'
 
 type SkuStatus = 'active' | 'inactive'
@@ -15,6 +16,22 @@ type FishSku = {
   status: SkuStatus
   created_at: string
   primary_image_thumb_url: string | null
+}
+
+function syncSkuPrimaryThumb(
+  items: FishSku[],
+  skuId: string,
+  images: ProductImageSummary[]
+) {
+  const nextPrimaryThumbUrl = getPrimaryProductImage(images)?.thumb_url ?? null
+  return items.map((item) =>
+    item.sku_id === skuId
+      ? {
+          ...item,
+          primary_image_thumb_url: nextPrimaryThumbUrl,
+        }
+      : item
+  )
 }
 
 function SkuThumbCell({
@@ -489,7 +506,13 @@ export default function ProductsPage() {
 
             {mode === 'edit' && editingId ? (
               <div style={{ marginTop: 16 }}>
-                <ProductImageManager skuId={editingId} skuName={form.name || undefined} />
+                <ProductImageManager
+                  skuId={editingId}
+                  skuName={form.name || undefined}
+                  onImagesChange={(nextImages) => {
+                    setSkus((current) => syncSkuPrimaryThumb(current, editingId, nextImages))
+                  }}
+                />
               </div>
             ) : null}
 

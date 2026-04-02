@@ -9,7 +9,7 @@ import {
   uploadProductSkuImages,
   type ProductImageSummary,
 } from '../lib/productImagesApi'
-import { moveProductImage } from '../lib/productImageState'
+import { getPrimaryProductImage, moveProductImage } from '../lib/productImageState'
 
 function formatFileSize(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '-'
@@ -74,41 +74,52 @@ function ProtectedImage({
 export default function ProductImageManager({
   skuId,
   skuName,
+  onImagesChange,
 }: {
   skuId: string | null
   skuName?: string
+  onImagesChange?: (images: ProductImageSummary[]) => void
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [loading, setLoading] = useState(true)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [images, setImages] = useState<ProductImageSummary[]>([])
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [previewImage, setPreviewImage] = useState<ProductImageSummary | null>(null)
+  const [previewImageId, setPreviewImageId] = useState<string | null>(null)
 
   const primaryImage = useMemo(
-    () => images.find((image) => image.is_primary) ?? null,
+    () => getPrimaryProductImage(images),
     [images]
   )
+  const previewImage = useMemo(
+    () => images.find((image) => image.image_id === previewImageId) ?? null,
+    [images, previewImageId]
+  )
+
+  function applyImages(nextImages: ProductImageSummary[]) {
+    setImages(nextImages)
+    onImagesChange?.(nextImages)
+  }
 
   useEffect(() => {
     if (!skuId) {
       setImages([])
       setLoading(false)
       setErrorMsg(null)
-      setPreviewImage(null)
+      setPreviewImageId(null)
       return
     }
 
     let alive = true
     setLoading(true)
     setErrorMsg(null)
-    setPreviewImage(null)
+    setPreviewImageId(null)
 
     ;(async () => {
       try {
         const detail = await loadProductSkuDetail(skuId)
         if (!alive) return
-        setImages(detail.images)
+        applyImages(detail.images)
       } catch (err) {
         if (!alive) return
         setErrorMsg(err instanceof Error ? err.message : '加载商品图片失败')
@@ -128,7 +139,7 @@ export default function ProductImageManager({
   async function refreshDetail() {
     if (!skuId) return
     const detail = await loadProductSkuDetail(skuId)
-    setImages(detail.images)
+    applyImages(detail.images)
   }
 
   async function handleUpload(fileList: FileList | null) {
@@ -138,7 +149,7 @@ export default function ProductImageManager({
     setErrorMsg(null)
     try {
       const detail = await uploadProductSkuImages(skuId, fileList)
-      setImages(detail.images)
+      applyImages(detail.images)
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : '上传图片失败')
     } finally {
@@ -158,11 +169,11 @@ export default function ProductImageManager({
     setBusyAction(`${delta > 0 ? 'down' : 'up'}:${imageId}`)
     setErrorMsg(null)
     try {
-      const detail = await reorderProductSkuImages(
+      const nextImagesFromServer = await reorderProductSkuImages(
         skuId,
         nextImages.map((item) => item.image_id)
       )
-      setImages(detail.images)
+      applyImages(nextImagesFromServer)
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : '调整顺序失败')
       await refreshDetail().catch(() => undefined)
@@ -177,8 +188,8 @@ export default function ProductImageManager({
     setBusyAction(`primary:${imageId}`)
     setErrorMsg(null)
     try {
-      const detail = await setProductSkuPrimaryImage(skuId, imageId)
-      setImages(detail.images)
+      const nextImagesFromServer = await setProductSkuPrimaryImage(skuId, imageId)
+      applyImages(nextImagesFromServer)
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : '设为主图失败')
       await refreshDetail().catch(() => undefined)
@@ -197,9 +208,9 @@ export default function ProductImageManager({
     setErrorMsg(null)
     try {
       const detail = await deleteProductSkuImage(skuId, imageId)
-      setImages(detail.images)
-      if (previewImage?.image_id === imageId) {
-        setPreviewImage(null)
+      applyImages(detail.images)
+      if (previewImageId === imageId) {
+        setPreviewImageId(null)
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : '删除图片失败')
@@ -260,7 +271,7 @@ export default function ProductImageManager({
             <button
               type="button"
               className="ghostBtn ghostBtn-small"
-              onClick={() => setPreviewImage(null)}
+              onClick={() => setPreviewImageId(null)}
             >
               关闭
             </button>
@@ -285,7 +296,7 @@ export default function ProductImageManager({
                 <button
                   type="button"
                   className="productImageThumbButton"
-                  onClick={() => setPreviewImage(image)}
+                  onClick={() => setPreviewImageId(image.image_id)}
                 >
                   <ProtectedImage
                     srcPath={image.thumb_url}
