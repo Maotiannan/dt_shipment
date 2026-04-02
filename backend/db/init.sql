@@ -93,44 +93,4 @@ alter table if exists product_images
 alter table if exists product_images
   add column if not exists deleted_at timestamptz;
 
--- Repair legacy product_images rows before applying uniqueness constraints.
-with normalized_active_images as (
-  select
-    image_id,
-    row_number() over (
-      partition by sku_id
-      order by sort_order, created_at, image_id
-    ) as next_sort_order
-  from product_images
-  where status = 'active'
-)
-update product_images as target
-set sort_order = normalized_active_images.next_sort_order
-from normalized_active_images
-where target.image_id = normalized_active_images.image_id
-  and target.sort_order is distinct from normalized_active_images.next_sort_order;
-
-with collapsed_active_primaries as (
-  select
-    image_id,
-    row_number() over (
-      partition by sku_id
-      order by sort_order, created_at, image_id
-    ) as primary_rank
-  from product_images
-  where status = 'active' and is_primary
-)
-update product_images as target
-set is_primary = false
-from collapsed_active_primaries
-where target.image_id = collapsed_active_primaries.image_id
-  and collapsed_active_primaries.primary_rank > 1;
-create unique index if not exists product_images_active_sku_sort_uidx
-  on product_images(sku_id, sort_order)
-  where status = 'active';
-create unique index if not exists product_images_active_primary_uidx
-  on product_images(sku_id)
-  where status = 'active' and is_primary;
-
-create index if not exists product_images_status_idx
-  on product_images(status, deleted_at);
+-- product_images index bootstrap is handled by backend/src/scripts/initDb.ts.
