@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiRequest } from '../lib/apiClient'
+import { fetchProtectedImageObjectUrl } from '../lib/productImagesApi'
+import ProductImageManager from '../components/ProductImageManager'
 
 type SkuStatus = 'active' | 'inactive'
 
@@ -12,6 +14,63 @@ type FishSku = {
   category: string | null
   status: SkuStatus
   created_at: string
+  primary_image_thumb_url: string | null
+}
+
+function SkuThumbCell({
+  srcPath,
+  label,
+}: {
+  srcPath: string | null
+  label: string
+}) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    if (!srcPath) {
+      setObjectUrl(null)
+      setError(false)
+      return
+    }
+
+    let alive = true
+    let nextObjectUrl: string | null = null
+    setObjectUrl(null)
+    setError(false)
+
+    ;(async () => {
+      try {
+        nextObjectUrl = await fetchProtectedImageObjectUrl(srcPath)
+        if (!alive) {
+          URL.revokeObjectURL(nextObjectUrl)
+          return
+        }
+        setObjectUrl(nextObjectUrl)
+      } catch {
+        if (alive) {
+          setError(true)
+        }
+      }
+    })()
+
+    return () => {
+      alive = false
+      if (nextObjectUrl) {
+        URL.revokeObjectURL(nextObjectUrl)
+      }
+    }
+  }, [srcPath])
+
+  if (!srcPath || error) {
+    return <div className="productListThumbPlaceholder">无图</div>
+  }
+
+  if (!objectUrl) {
+    return <div className="productListThumbPlaceholder">加载中...</div>
+  }
+
+  return <img src={objectUrl} alt={label} className="productListThumbImage" />
 }
 
 type Mode = 'create' | 'edit'
@@ -252,6 +311,7 @@ export default function ProductsPage() {
             <thead>
               <tr>
                 <th>名称/编码</th>
+                <th style={{ width: 96 }}>主图</th>
                 <th className="right">单价</th>
                 <th>状态</th>
                 <th>规格</th>
@@ -272,6 +332,9 @@ export default function ProductsPage() {
                         编码：{s.sku_code}
                       </div>
                     ) : null}
+                  </td>
+                  <td>
+                    <SkuThumbCell srcPath={s.primary_image_thumb_url} label={s.name} />
                   </td>
                   <td className="right">{Number(s.unit_price).toFixed(2)}</td>
                   <td>{s.status}</td>
@@ -294,7 +357,7 @@ export default function ProductsPage() {
               ))}
               {!loading && filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: 14, opacity: 0.8 }}>
+                  <td colSpan={8} style={{ padding: 14, opacity: 0.8 }}>
                     暂无 SKU
                   </td>
                 </tr>
@@ -424,6 +487,12 @@ export default function ProductsPage() {
               </select>
             </div>
 
+            {mode === 'edit' && editingId ? (
+              <div style={{ marginTop: 16 }}>
+                <ProductImageManager skuId={editingId} skuName={form.name || undefined} />
+              </div>
+            ) : null}
+
             {errorMsg ? (
               <div
                 style={{
@@ -459,4 +528,3 @@ export default function ProductsPage() {
     </div>
   )
 }
-

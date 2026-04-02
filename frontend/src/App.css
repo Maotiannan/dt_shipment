@@ -500,6 +500,225 @@
   text-align: right;
 }
 
+.productListThumbPlaceholder,
+.productListThumbImage {
+  width: 72px;
+  height: 54px;
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+
+.productListThumbPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--text);
+  opacity: 0.68;
+  font-size: 11px;
+}
+
+.productListThumbImage {
+  display: block;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.productImageManager {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.52);
+  display: grid;
+  gap: 12px;
+}
+
+.productImageManagerHeader {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.productImageManagerHeaderText h4 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-h);
+}
+
+.productImageManagerHeaderText p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.76;
+}
+
+.productImageManagerHeaderActions {
+  flex: 0 0 auto;
+}
+
+.productImageManagerMeta {
+  display: flex;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  opacity: 0.82;
+}
+
+.productImageManagerState,
+.productImageManagerEmpty,
+.productImageManagerError {
+  padding: 12px;
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.productImageManagerState,
+.productImageManagerEmpty {
+  border: 1px dashed var(--border);
+  background: rgba(255, 255, 255, 0.45);
+  opacity: 0.9;
+}
+
+.productImageManagerError {
+  border: 1px solid rgba(185, 28, 28, 0.25);
+  background: rgba(255, 0, 0, 0.05);
+  color: #b91c1c;
+}
+
+.productImageGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.productImageCard {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.productImageThumbButton {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.productImageThumb,
+.productImagePlaceholder {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  box-sizing: border-box;
+}
+
+.productImageThumb {
+  display: block;
+  object-fit: cover;
+  background: #f3f4f6;
+}
+
+.productImagePlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(243, 244, 246, 0.95));
+  color: var(--text);
+  opacity: 0.72;
+  text-align: center;
+  font-size: 12px;
+}
+
+.productImageCardBody {
+  display: grid;
+  gap: 10px;
+  padding: 10px 10px 12px;
+}
+
+.productImageCardTopRow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.productImageCardTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.productImageCardSub {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.76;
+}
+
+.productImageCardActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.productImageBadge {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(170, 59, 255, 0.12);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.productImagePreviewPanel {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  display: grid;
+  gap: 10px;
+}
+
+.productImagePreviewHeader {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.productImagePreviewTitle {
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.productImagePreviewSub {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.76;
+}
+
+.productImagePreviewMedia {
+  width: 100%;
+  max-height: 380px;
+  object-fit: contain;
+  background: #111827;
+  border-radius: 12px;
+}
+
+.productImagePreviewPanel .productImagePlaceholder {
+  min-height: 240px;
+  aspect-ratio: auto;
+}
+
 .tagDanger {
   color: var(--danger);
   font-weight: 700;
