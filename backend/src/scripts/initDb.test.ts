@@ -74,6 +74,20 @@ function makePool(scenario: Scenario) {
         return { rows: [{ has_sku_foreign_key: true }] }
       }
 
+      if (
+        normalized.includes('select exists ( select 1 from ( select image_id from product_images') &&
+        normalized.includes('having count(*) > 1')
+      ) {
+        return { rows: [{ has_duplicate_image_ids: false }] }
+      }
+
+      if (
+        normalized.includes('select exists ( select 1 from ( select storage_key from product_images') &&
+        normalized.includes('having count(*) > 1')
+      ) {
+        return { rows: [{ has_duplicate_storage_keys: false }] }
+      }
+
       if (normalized.includes("from pg_indexes") && normalized.includes("product_images_sku_sort_idx")) {
         return { rows: state.legacyIndexNames.map((indexname) => ({ indexname })) }
       }
@@ -140,14 +154,14 @@ function makePool(scenario: Scenario) {
         state.currentIndexNames = [
           ...new Set([...state.currentIndexNames, 'product_images_active_sku_sort_uidx']),
         ]
-        if (normalized.includes('product_images_active_primary_uidx')) {
-          state.currentIndexNames = [
-            ...new Set([...state.currentIndexNames, 'product_images_active_primary_uidx']),
-          ]
-        }
-        if (normalized.includes('product_images_status_idx')) {
-          state.currentIndexNames = [...new Set([...state.currentIndexNames, 'product_images_status_idx'])]
-        }
+        return { rows: [] }
+      }
+
+      if (normalized.startsWith('create unique index if not exists product_images_active_primary_uidx')) {
+        currentIndexesCreated = true
+        state.currentIndexNames = [
+          ...new Set([...state.currentIndexNames, 'product_images_active_primary_uidx']),
+        ]
         return { rows: [] }
       }
 

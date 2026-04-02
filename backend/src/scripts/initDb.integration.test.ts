@@ -87,6 +87,53 @@ async function withDisposablePostgres<T>(fn: (pool: Pool) => Promise<T>) {
   }
 }
 
+function normalizeSql(sql: string) {
+  return sql.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function isSchemaMutationQuery(sql: string) {
+  const normalized = normalizeSql(sql)
+  return (
+    normalized.startsWith('alter table') ||
+    normalized.startsWith('update product_images') ||
+    normalized.startsWith('insert into skus') ||
+    normalized.startsWith('drop index') ||
+    normalized.startsWith('create unique index') ||
+    normalized.startsWith('create index if not exists product_images_status_idx')
+  )
+}
+
+function countSchemaMutationQueries(queries: string[]) {
+  return queries.filter(isSchemaMutationQuery).length
+}
+
+function createRecordingPool(pool: Pool) {
+  const queries: string[] = []
+
+  return {
+    queries,
+    async query(sql: string) {
+      queries.push(normalizeSql(sql))
+      return pool.query(sql)
+    },
+    async connect() {
+      const client = await pool.connect()
+      return {
+        async query(sql: string) {
+          queries.push(normalizeSql(sql))
+          return client.query(sql)
+        },
+        release() {
+          client.release()
+        },
+      }
+    },
+    async end() {
+      await pool.end()
+    },
+  }
+}
+
 async function seedLegacyDuplicateState(pool: Pool, includeLegacyIndexes: boolean) {
   await pool.query(`
     create table if not exists skus (
@@ -205,6 +252,38 @@ async function seedPartialProductImagesTable(pool: Pool) {
       sku_id uuid,
       storage_key text
     );
+  `)
+}
+
+async function seedPartialProductImagesDuplicateStorageKeyState(pool: Pool) {
+  await seedPartialProductImagesTable(pool)
+
+  await pool.query(`
+    insert into product_images (image_id, sku_id, storage_key)
+    values
+      ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '44444444-4444-4444-4444-444444444444', 'dup-storage'),
+      ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '44444444-4444-4444-4444-444444444444', 'dup-storage');
+  `)
+}
+
+async function seedPartialProductImagesCompositeUniqueState(pool: Pool) {
+  await seedPartialProductImagesTable(pool)
+
+  await pool.query(`
+    alter table product_images
+      add constraint product_images_storage_key_sku_id_key unique (storage_key, sku_id);
+  `)
+
+  await pool.query(`
+    insert into skus (sku_id, name)
+    values ('55555555-5555-5555-5555-555555555555', 'composite unique sku');
+  `)
+
+  await pool.query(`
+    insert into product_images (image_id, sku_id, storage_key)
+    values
+      ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '55555555-5555-5555-5555-555555555555', 'composite/a'),
+      ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '55555555-5555-5555-5555-555555555555', 'composite/b');
   `)
 }
 
@@ -334,8 +413,13 @@ const schemaSql = readFileSync(path.resolve(process.cwd(), 'db/init.sql'), 'utf8
 
 dbTest('db:init converges clean, legacy, gapped, and partial postgres states', async () => {
   await withDisposablePostgres(async (pool) => {
-    await runInitDb(pool, schemaSql)
-    await runInitDb(pool, schemaSql)
+    const recordingPool = createRecordingPool(pool)
+
+    await runInitDb(recordingPool, schemaSql)
+    recordingPool.queries.length = 0
+    await runInitDb(recordingPool, schemaSql)
+
+    assert.equal(countSchemaMutationQueries(recordingPool.queries), 0)
 
     const state = await readProductImageState(pool)
     assert.equal(state.rows.length, 0)
@@ -486,5 +570,48 @@ dbTest('db:init converges clean, legacy, gapped, and partial postgres states', a
       'product_images_sku_id_fkey:f',
       'product_images_storage_key_key:u',
     ])
+  })
+
+  await withDisposablePostgres(async (pool) => {
+    await seedPartialProductImagesDuplicateStorageKeyState(pool)
+    const recordingPool = createRecordingPool(pool)
+
+    await assert.rejects(() => runInitDb(recordingPool, schemaSql), /duplicate image_id or storage_key values/)
+    assert.equal(countSchemaMutationQueries(recordingPool.queries), 0)
+
+    const columns = await readProductImageColumns(pool)
+    assert.deepEqual(columns, ['image_id', 'sku_id', 'storage_key'])
+
+    const rows = await pool.query<{
+      image_id: string
+      sku_id: string
+      storage_key: string
+    }>(`
+      select image_id, sku_id, storage_key
+      from product_images
+      order by image_id
+    `)
+
+    assert.deepEqual(rows.rows, [
+      {
+        image_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        sku_id: '44444444-4444-4444-4444-444444444444',
+        storage_key: 'dup-storage',
+      },
+      {
+        image_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        sku_id: '44444444-4444-4444-4444-444444444444',
+        storage_key: 'dup-storage',
+      },
+    ])
+  })
+
+  await withDisposablePostgres(async (pool) => {
+    await seedPartialProductImagesCompositeUniqueState(pool)
+    await runInitDb(pool, schemaSql)
+
+    const constraintNames = await readProductImageConstraintNames(pool)
+    assert.ok(constraintNames.includes('product_images_storage_key_key:u'))
+    assert.ok(constraintNames.includes('product_images_storage_key_sku_id_key:u'))
   })
 })

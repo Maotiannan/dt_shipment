@@ -2,18 +2,26 @@ import { needsLegacyProductImageRepair, needsProductImageRepair } from './initDb
 
 export type InitDbPool = {
   query(sql: string): Promise<{ rows: Array<Record<string, unknown>> }>
+  connect?: () => Promise<{
+    query(sql: string): Promise<{ rows: Array<Record<string, unknown>> }>
+    release(): void
+  }>
   end(): Promise<void>
 }
 
-const PRODUCT_IMAGE_INDEX_SQL = `
+const PRODUCT_IMAGE_ACTIVE_SKU_SORT_INDEX_SQL = `
 create unique index if not exists product_images_active_sku_sort_uidx
   on product_images(sku_id, sort_order)
   where status = 'active';
+`
 
+const PRODUCT_IMAGE_ACTIVE_PRIMARY_INDEX_SQL = `
 create unique index if not exists product_images_active_primary_uidx
   on product_images(sku_id)
   where status = 'active' and is_primary;
+`
 
+const PRODUCT_IMAGE_STATUS_INDEX_SQL = `
 create index if not exists product_images_status_idx
   on product_images(status, deleted_at);
 `
@@ -38,10 +46,11 @@ const PRODUCT_IMAGE_PRIMARY_KEY_SQL = `
       on namespace_row.oid = table_row.relnamespace
     join pg_attribute attribute_row
       on attribute_row.attrelid = table_row.oid
-     and attribute_row.attnum = any (constraint_row.conkey)
+     and constraint_row.conkey[1] = attribute_row.attnum
     where namespace_row.nspname = current_schema()
       and table_row.relname = 'product_images'
       and constraint_row.contype = 'p'
+      and array_length(constraint_row.conkey, 1) = 1
       and attribute_row.attname = 'image_id'
   ) as has_primary_key
 `
@@ -56,10 +65,11 @@ const PRODUCT_IMAGE_STORAGE_KEY_UNIQUE_SQL = `
       on namespace_row.oid = table_row.relnamespace
     join pg_attribute attribute_row
       on attribute_row.attrelid = table_row.oid
-     and attribute_row.attnum = any (constraint_row.conkey)
+     and constraint_row.conkey[1] = attribute_row.attnum
     where namespace_row.nspname = current_schema()
       and table_row.relname = 'product_images'
       and constraint_row.contype = 'u'
+      and array_length(constraint_row.conkey, 1) = 1
       and attribute_row.attname = 'storage_key'
   ) as has_storage_key_unique
 `
@@ -76,13 +86,15 @@ const PRODUCT_IMAGE_SKU_FOREIGN_KEY_SQL = `
       on foreign_table_row.oid = constraint_row.confrelid
     join pg_attribute table_attribute_row
       on table_attribute_row.attrelid = table_row.oid
-     and table_attribute_row.attnum = any (constraint_row.conkey)
+     and constraint_row.conkey[1] = table_attribute_row.attnum
     join pg_attribute foreign_attribute_row
       on foreign_attribute_row.attrelid = foreign_table_row.oid
-     and foreign_attribute_row.attnum = any (constraint_row.confkey)
+     and constraint_row.confkey[1] = foreign_attribute_row.attnum
     where namespace_row.nspname = current_schema()
       and table_row.relname = 'product_images'
       and constraint_row.contype = 'f'
+      and array_length(constraint_row.conkey, 1) = 1
+      and array_length(constraint_row.confkey, 1) = 1
       and table_attribute_row.attname = 'sku_id'
       and foreign_table_row.relname = 'skus'
       and foreign_attribute_row.attname = 'sku_id'
@@ -147,12 +159,50 @@ const CURRENT_PRODUCT_IMAGE_INDEX_SQL = `
     )
 `
 
+const PRODUCT_IMAGE_BOOTSTRAP_INDEX_SQL = `
+  select indexname
+  from pg_indexes
+  where schemaname = current_schema()
+    and tablename = 'product_images'
+    and indexname in (
+      'product_images_active_sku_sort_uidx',
+      'product_images_active_primary_uidx',
+      'product_images_status_idx'
+    )
+`
+
 const PRODUCT_IMAGE_ROW_EXISTS_SQL = `
   select exists (
     select 1
     from product_images
     limit 1
   ) as has_rows
+`
+
+const PRODUCT_IMAGE_DUPLICATE_IMAGE_ID_SQL = `
+  select exists (
+    select 1
+    from (
+      select image_id
+      from product_images
+      where image_id is not null
+      group by image_id
+      having count(*) > 1
+    ) duplicate_image_ids
+  ) as has_duplicate_image_ids
+`
+
+const PRODUCT_IMAGE_DUPLICATE_STORAGE_KEY_SQL = `
+  select exists (
+    select 1
+    from (
+      select storage_key
+      from product_images
+      where storage_key is not null
+      group by storage_key
+      having count(*) > 1
+    ) duplicate_storage_keys
+  ) as has_duplicate_storage_keys
 `
 
 const PRODUCT_IMAGE_CANONICAL_DRIFT_SQL = `
@@ -190,7 +240,11 @@ const PRODUCT_IMAGE_CANONICAL_DRIFT_SQL = `
 `
 
 export function getProductImageBootstrapSql() {
-  return PRODUCT_IMAGE_INDEX_SQL
+  return [
+    PRODUCT_IMAGE_ACTIVE_SKU_SORT_INDEX_SQL,
+    PRODUCT_IMAGE_ACTIVE_PRIMARY_INDEX_SQL,
+    PRODUCT_IMAGE_STATUS_INDEX_SQL,
+  ].join('\n')
 }
 
 export function getProductImageRepairSql() {
@@ -231,6 +285,11 @@ type ProductImageSchemaDrift = {
   hasSkuForeignKey: boolean
 }
 
+type ProductImageKeyConflicts = {
+  hasDuplicateImageIds: boolean
+  hasDuplicateStorageKeys: boolean
+}
+
 const REQUIRED_PRODUCT_IMAGE_COLUMN_DEFINITIONS = [
   { columnName: 'image_id', shouldBeNotNull: true, defaultTokenGroups: [['gen_random_uuid()']] },
   { columnName: 'sku_id', shouldBeNotNull: true },
@@ -256,13 +315,14 @@ const REQUIRED_PRODUCT_IMAGE_COLUMN_DEFINITIONS = [
     shouldBeNotNull: true,
     defaultTokenGroups: [['now()'], ['CURRENT_TIMESTAMP']],
   },
+  { columnName: 'deleted_at', shouldBeNotNull: false },
 ] as const
 
 type DefaultTokenGroup = readonly string[]
 
 type RequiredProductImageColumnDefinition = {
   columnName: string
-  shouldBeNotNull: true
+  shouldBeNotNull: boolean
   defaultTokens?: readonly string[]
   defaultTokenGroups?: readonly DefaultTokenGroup[]
 }
@@ -271,6 +331,10 @@ function columnDefaultMatches(
   actualDefault: string | null,
   definition: RequiredProductImageColumnDefinition
 ) {
+  if (!definition.defaultTokens && !definition.defaultTokenGroups) {
+    return true
+  }
+
   if (!actualDefault) {
     return false
   }
@@ -308,6 +372,28 @@ async function hasProductImageSkuForeignKey(pool: InitDbPool) {
   return getBooleanValue(result.rows[0], 'has_sku_foreign_key')
 }
 
+async function hasProductImageKeyConflicts(pool: InitDbPool) {
+  const columns = await getProductImageColumns(pool)
+  const columnNames = new Set(columns.map((column) => column.column_name))
+
+  const conflicts: ProductImageKeyConflicts = {
+    hasDuplicateImageIds: false,
+    hasDuplicateStorageKeys: false,
+  }
+
+  if (columnNames.has('image_id')) {
+    const result = await pool.query(PRODUCT_IMAGE_DUPLICATE_IMAGE_ID_SQL)
+    conflicts.hasDuplicateImageIds = Boolean(result.rows[0]?.has_duplicate_image_ids)
+  }
+
+  if (columnNames.has('storage_key')) {
+    const result = await pool.query(PRODUCT_IMAGE_DUPLICATE_STORAGE_KEY_SQL)
+    conflicts.hasDuplicateStorageKeys = Boolean(result.rows[0]?.has_duplicate_storage_keys)
+  }
+
+  return conflicts
+}
+
 async function detectProductImageSchemaRepairNeed(pool: InitDbPool) {
   const columns = await getProductImageColumns(pool)
   const columnMap = new Map(columns.map((column) => [column.column_name, column]))
@@ -321,6 +407,12 @@ async function detectProductImageSchemaRepairNeed(pool: InitDbPool) {
 
     if (!column) {
       missingColumns.add(definition.columnName)
+      if (definition.shouldBeNotNull) {
+        missingNotNullColumns.add(definition.columnName)
+      }
+      if ('defaultTokens' in definition || 'defaultTokenGroups' in definition) {
+        missingDefaultColumns.add(definition.columnName)
+      }
       continue
     }
 
@@ -355,54 +447,135 @@ function needsProductImageSchemaRepair(preflight: ProductImageSchemaDrift) {
 }
 
 async function repairProductImageSchema(pool: InitDbPool, preflight: ProductImageSchemaDrift) {
-  const hasMissingSkuId = preflight.missingColumns.has('sku_id') || preflight.missingNotNullColumns.has('sku_id')
-  const hasMissingStorageKey =
-    preflight.missingColumns.has('storage_key') || preflight.missingNotNullColumns.has('storage_key')
-  const hasMissingOriginalRelpath =
-    preflight.missingColumns.has('original_relpath') ||
-    preflight.missingNotNullColumns.has('original_relpath')
-  const hasMissingThumbRelpath =
-    preflight.missingColumns.has('thumb_relpath') || preflight.missingNotNullColumns.has('thumb_relpath')
-  const hasMissingMimeType =
-    preflight.missingColumns.has('mime_type') || preflight.missingNotNullColumns.has('mime_type')
-  const hasMissingFileExt =
-    preflight.missingColumns.has('file_ext') || preflight.missingNotNullColumns.has('file_ext')
-  const hasMissingFileSize =
-    preflight.missingColumns.has('file_size') || preflight.missingNotNullColumns.has('file_size')
-  const hasMissingWidth = preflight.missingColumns.has('width') || preflight.missingNotNullColumns.has('width')
-  const hasMissingHeight =
-    preflight.missingColumns.has('height') || preflight.missingNotNullColumns.has('height')
-  const hasMissingSha256 =
-    preflight.missingColumns.has('sha256') || preflight.missingNotNullColumns.has('sha256')
-  const hasMissingSortOrder =
-    preflight.missingColumns.has('sort_order') || preflight.missingNotNullColumns.has('sort_order')
-  const hasMissingIsPrimary =
-    preflight.missingColumns.has('is_primary') || preflight.missingNotNullColumns.has('is_primary')
-  const hasMissingStatus = preflight.missingColumns.has('status') || preflight.missingNotNullColumns.has('status')
-  const hasMissingCreatedAt =
-    preflight.missingColumns.has('created_at') || preflight.missingNotNullColumns.has('created_at')
-  const hasMissingUpdatedAt =
-    preflight.missingColumns.has('updated_at') || preflight.missingNotNullColumns.has('updated_at')
-  const hasMissingImageId =
-    preflight.missingColumns.has('image_id') || preflight.missingNotNullColumns.has('image_id')
+  const addColumnStatements = []
+
+  if (preflight.missingColumns.has('image_id')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists image_id uuid not null default gen_random_uuid();
+    `)
+  }
+
+  if (preflight.missingColumns.has('sku_id')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists sku_id uuid;
+    `)
+  }
+
+  if (preflight.missingColumns.has('storage_key')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists storage_key text;
+    `)
+  }
+
+  if (preflight.missingColumns.has('original_relpath')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists original_relpath text;
+    `)
+  }
+
+  if (preflight.missingColumns.has('thumb_relpath')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists thumb_relpath text;
+    `)
+  }
+
+  if (preflight.missingColumns.has('mime_type')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists mime_type text;
+    `)
+  }
+
+  if (preflight.missingColumns.has('file_ext')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists file_ext text;
+    `)
+  }
+
+  if (preflight.missingColumns.has('file_size')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists file_size bigint;
+    `)
+  }
+
+  if (preflight.missingColumns.has('width')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists width integer;
+    `)
+  }
+
+  if (preflight.missingColumns.has('height')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists height integer;
+    `)
+  }
+
+  if (preflight.missingColumns.has('sha256')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists sha256 text;
+    `)
+  }
+
+  if (preflight.missingColumns.has('sort_order')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists sort_order integer not null default 1;
+    `)
+  }
+
+  if (preflight.missingColumns.has('is_primary')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists is_primary boolean not null default false;
+    `)
+  }
+
+  if (preflight.missingColumns.has('status')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists status text not null default 'active';
+    `)
+  }
+
+  if (preflight.missingColumns.has('created_at')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists created_at timestamptz not null default now();
+    `)
+  }
+
+  if (preflight.missingColumns.has('updated_at')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists updated_at timestamptz not null default now();
+    `)
+  }
+
+  if (preflight.missingColumns.has('deleted_at')) {
+    addColumnStatements.push(`
+      alter table if exists product_images
+        add column if not exists deleted_at timestamptz;
+    `)
+  }
+
+  for (const statement of addColumnStatements) {
+    await pool.query(statement)
+  }
 
   if (
-    hasMissingImageId ||
-    hasMissingSkuId ||
-    hasMissingStorageKey ||
-    hasMissingOriginalRelpath ||
-    hasMissingThumbRelpath ||
-    hasMissingMimeType ||
-    hasMissingFileExt ||
-    hasMissingFileSize ||
-    hasMissingWidth ||
-    hasMissingHeight ||
-    hasMissingSha256 ||
-    hasMissingSortOrder ||
-    hasMissingIsPrimary ||
-    hasMissingStatus ||
-    hasMissingCreatedAt ||
-    hasMissingUpdatedAt
+    preflight.missingColumns.size > 0 ||
+    preflight.missingNotNullColumns.size > 0 ||
+    preflight.missingDefaultColumns.size > 0
   ) {
     await pool.query(`
       insert into skus (sku_id, name, status)
@@ -491,33 +664,92 @@ async function repairProductImageSchema(pool: InitDbPool, preflight: ProductImag
     `)
   }
 
-  const schemaAlterStatements = [
-    `alter table if exists product_images alter column image_id set default gen_random_uuid();`,
-    `alter table if exists product_images alter column sort_order set default 1;`,
-    `alter table if exists product_images alter column is_primary set default false;`,
-    `alter table if exists product_images alter column status set default 'active';`,
-    `alter table if exists product_images alter column created_at set default now();`,
-    `alter table if exists product_images alter column updated_at set default now();`,
-    `alter table if exists product_images alter column image_id set not null;`,
-    `alter table if exists product_images alter column sku_id set not null;`,
-    `alter table if exists product_images alter column storage_key set not null;`,
-    `alter table if exists product_images alter column original_relpath set not null;`,
-    `alter table if exists product_images alter column thumb_relpath set not null;`,
-    `alter table if exists product_images alter column mime_type set not null;`,
-    `alter table if exists product_images alter column file_ext set not null;`,
-    `alter table if exists product_images alter column file_size set not null;`,
-    `alter table if exists product_images alter column width set not null;`,
-    `alter table if exists product_images alter column height set not null;`,
-    `alter table if exists product_images alter column sha256 set not null;`,
-    `alter table if exists product_images alter column sort_order set not null;`,
-    `alter table if exists product_images alter column is_primary set not null;`,
-    `alter table if exists product_images alter column status set not null;`,
-    `alter table if exists product_images alter column created_at set not null;`,
-    `alter table if exists product_images alter column updated_at set not null;`,
-  ]
+  if (preflight.missingDefaultColumns.has('image_id')) {
+    await pool.query(`alter table if exists product_images alter column image_id set default gen_random_uuid();`)
+  }
 
-  for (const statement of schemaAlterStatements) {
-    await pool.query(statement)
+  if (preflight.missingDefaultColumns.has('sort_order')) {
+    await pool.query(`alter table if exists product_images alter column sort_order set default 1;`)
+  }
+
+  if (preflight.missingDefaultColumns.has('is_primary')) {
+    await pool.query(`alter table if exists product_images alter column is_primary set default false;`)
+  }
+
+  if (preflight.missingDefaultColumns.has('status')) {
+    await pool.query(`alter table if exists product_images alter column status set default 'active';`)
+  }
+
+  if (preflight.missingDefaultColumns.has('created_at')) {
+    await pool.query(`alter table if exists product_images alter column created_at set default now();`)
+  }
+
+  if (preflight.missingDefaultColumns.has('updated_at')) {
+    await pool.query(`alter table if exists product_images alter column updated_at set default now();`)
+  }
+
+  if (preflight.missingNotNullColumns.has('image_id')) {
+    await pool.query(`alter table if exists product_images alter column image_id set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('sku_id')) {
+    await pool.query(`alter table if exists product_images alter column sku_id set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('storage_key')) {
+    await pool.query(`alter table if exists product_images alter column storage_key set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('original_relpath')) {
+    await pool.query(`alter table if exists product_images alter column original_relpath set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('thumb_relpath')) {
+    await pool.query(`alter table if exists product_images alter column thumb_relpath set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('mime_type')) {
+    await pool.query(`alter table if exists product_images alter column mime_type set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('file_ext')) {
+    await pool.query(`alter table if exists product_images alter column file_ext set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('file_size')) {
+    await pool.query(`alter table if exists product_images alter column file_size set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('width')) {
+    await pool.query(`alter table if exists product_images alter column width set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('height')) {
+    await pool.query(`alter table if exists product_images alter column height set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('sha256')) {
+    await pool.query(`alter table if exists product_images alter column sha256 set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('sort_order')) {
+    await pool.query(`alter table if exists product_images alter column sort_order set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('is_primary')) {
+    await pool.query(`alter table if exists product_images alter column is_primary set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('status')) {
+    await pool.query(`alter table if exists product_images alter column status set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('created_at')) {
+    await pool.query(`alter table if exists product_images alter column created_at set not null;`)
+  }
+
+  if (preflight.missingNotNullColumns.has('updated_at')) {
+    await pool.query(`alter table if exists product_images alter column updated_at set not null;`)
   }
 
   if (!preflight.hasPrimaryKey) {
@@ -594,24 +826,69 @@ async function detectProductImageRepairNeed(pool: InitDbPool) {
 }
 
 export async function runInitDb(pool: InitDbPool, schemaSql: string) {
-  await pool.query('create extension if not exists pgcrypto;')
-  await pool.query(schemaSql)
+  const runner = async (client: InitDbPool) => {
+    const keyConflicts = await hasProductImageKeyConflicts(client)
 
-  const schemaRepairNeed = await detectProductImageSchemaRepairNeed(pool)
+    if (keyConflicts.hasDuplicateImageIds || keyConflicts.hasDuplicateStorageKeys) {
+      throw new Error(
+        'product_images contains duplicate image_id or storage_key values; cannot safely converge schema'
+      )
+    }
 
-  if (needsProductImageSchemaRepair(schemaRepairNeed)) {
-    await repairProductImageSchema(pool, schemaRepairNeed)
-  }
+    await client.query('create extension if not exists pgcrypto;')
+    await client.query(schemaSql)
 
-  const repairNeed = await detectProductImageRepairNeed(pool)
+    const schemaRepairNeed = await detectProductImageSchemaRepairNeed(client)
 
-  if (repairNeed.needsRepair) {
-    await pool.query(PRODUCT_IMAGE_REPAIR_SQL)
-    if (repairNeed.hasLegacyIndexes) {
-      await pool.query('drop index if exists product_images_sku_sort_idx;')
-      await pool.query('drop index if exists product_images_primary_idx;')
+    if (needsProductImageSchemaRepair(schemaRepairNeed)) {
+      await repairProductImageSchema(client, schemaRepairNeed)
+    }
+
+    const repairNeed = await detectProductImageRepairNeed(client)
+
+    if (repairNeed.needsRepair) {
+      await client.query(PRODUCT_IMAGE_REPAIR_SQL)
+      if (repairNeed.hasLegacyIndexes) {
+        await client.query('drop index if exists product_images_sku_sort_idx;')
+        await client.query('drop index if exists product_images_primary_idx;')
+      }
+    }
+
+    const currentIndexNames = await listIndexNames(client, PRODUCT_IMAGE_BOOTSTRAP_INDEX_SQL)
+
+    if (!currentIndexNames.includes('product_images_active_sku_sort_uidx')) {
+      await client.query(PRODUCT_IMAGE_ACTIVE_SKU_SORT_INDEX_SQL)
+    }
+
+    if (!currentIndexNames.includes('product_images_active_primary_uidx')) {
+      await client.query(PRODUCT_IMAGE_ACTIVE_PRIMARY_INDEX_SQL)
+    }
+
+    if (!currentIndexNames.includes('product_images_status_idx')) {
+      await client.query(PRODUCT_IMAGE_STATUS_INDEX_SQL)
     }
   }
 
-  await pool.query(PRODUCT_IMAGE_INDEX_SQL)
+  const connect = pool.connect
+
+  if (typeof connect !== 'function') {
+    await runner(pool)
+    return
+  }
+
+  const client = await connect.call(pool)
+
+  try {
+    await client.query('begin')
+    await runner({
+      query: (sql: string) => client.query(sql),
+      end: async () => undefined,
+    })
+    await client.query('commit')
+  } catch (err) {
+    await client.query('rollback').catch(() => undefined)
+    throw err
+  } finally {
+    client.release()
+  }
 }

@@ -67,63 +67,12 @@ create table if not exists product_images (
   width integer not null,
   height integer not null,
   sha256 text not null,
-  sort_order integer not null,
+  sort_order integer not null default 1,
   is_primary boolean not null default false,
   status text not null default 'active',
   deleted_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
-alter table if exists product_images
-  add column if not exists image_id uuid;
-
-alter table if exists product_images
-  add column if not exists sku_id uuid;
-
-alter table if exists product_images
-  add column if not exists storage_key text;
-
-alter table if exists product_images
-  add column if not exists original_relpath text;
-
-alter table if exists product_images
-  add column if not exists thumb_relpath text;
-
-alter table if exists product_images
-  add column if not exists mime_type text;
-
-alter table if exists product_images
-  add column if not exists file_ext text;
-
-alter table if exists product_images
-  add column if not exists file_size bigint;
-
-alter table if exists product_images
-  add column if not exists width integer;
-
-alter table if exists product_images
-  add column if not exists height integer;
-
-alter table if exists product_images
-  add column if not exists sha256 text;
-
-alter table if exists product_images
-  add column if not exists sort_order integer not null default 1;
-
-alter table if exists product_images
-  add column if not exists is_primary boolean not null default false;
-
-alter table if exists product_images
-  add column if not exists status text not null default 'active';
-
-alter table if exists product_images
-  add column if not exists created_at timestamptz not null default now();
-
-alter table if exists product_images
-  add column if not exists updated_at timestamptz not null default now();
-
-alter table if exists product_images
-  add column if not exists deleted_at timestamptz;
 
 -- product_images index bootstrap is handled by backend/src/scripts/initDb.ts.
