@@ -5,8 +5,8 @@ export const LEGACY_PRODUCT_IMAGE_INDEX_NAMES = new Set([
 
 export type ProductImageRepairPreflight = {
   hasLegacyIndexes: boolean
-  hasDuplicateActiveSortOrders: boolean
-  hasDuplicateActivePrimaries: boolean
+  hasActiveRows: boolean
+  hasCanonicalDrift: boolean
 }
 
 export function needsLegacyProductImageRepair(indexNames: string[]) {
@@ -14,9 +14,5 @@ export function needsLegacyProductImageRepair(indexNames: string[]) {
 }
 
 export function needsProductImageRepair(preflight: ProductImageRepairPreflight) {
-  return (
-    preflight.hasLegacyIndexes ||
-    preflight.hasDuplicateActiveSortOrders ||
-    preflight.hasDuplicateActivePrimaries
-  )
+  return preflight.hasLegacyIndexes || (preflight.hasActiveRows && preflight.hasCanonicalDrift)
 }

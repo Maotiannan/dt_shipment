@@ -22,6 +22,7 @@ const PRODUCT_IMAGE_REPAIR_SQL = `
 with normalized_active_images as (
   select
     image_id,
+    sku_id,
     row_number() over (
       partition by sku_id
       order by sort_order, image_id
@@ -36,22 +37,23 @@ from normalized_active_images
 where target.image_id = normalized_active_images.image_id
   and target.sort_order is distinct from normalized_active_images.next_sort_order;
 
-with collapsed_active_primaries as (
+with canonical_active_images as (
   select
     image_id,
+    sku_id,
     row_number() over (
       partition by sku_id
       order by sort_order, image_id
-    ) as primary_rank
+    ) as canonical_rank
   from product_images
-  where status = 'active' and is_primary
+  where status = 'active'
 )
 update product_images as target
-set is_primary = false
+set is_primary = canonical_active_images.canonical_rank = 1
   , updated_at = now()
-from collapsed_active_primaries
-where target.image_id = collapsed_active_primaries.image_id
-  and collapsed_active_primaries.primary_rank > 1;
+from canonical_active_images
+where target.image_id = canonical_active_images.image_id
+  and target.is_primary is distinct from (canonical_active_images.canonical_rank = 1);
 `
 
 const LEGACY_PRODUCT_IMAGE_INDEX_SQL = `
@@ -81,23 +83,25 @@ const PRODUCT_IMAGE_ROW_EXISTS_SQL = `
   ) as has_rows
 `
 
-const PRODUCT_IMAGE_DUPLICATE_SORT_SQL = `
+const PRODUCT_IMAGE_CANONICAL_DRIFT_SQL = `
   select exists (
     select 1
-    from product_images
-    where status = 'active'
-    group by sku_id, sort_order
-    having count(*) > 1
-  ) as has_duplicates
-`
-
-const PRODUCT_IMAGE_DUPLICATE_PRIMARY_SQL = `
-  select exists (
-    select 1
-    from product_images
-    where status = 'active' and is_primary
-    group by sku_id
-    having count(*) > 1
+    from (
+      select
+        sku_id,
+        count(*) as active_count,
+        min(sort_order) as min_sort_order,
+        max(sort_order) as max_sort_order,
+        count(*) filter (where is_primary) as primary_count,
+        count(distinct sort_order) as distinct_sort_count
+      from product_images
+      where status = 'active'
+      group by sku_id
+    ) sku_state
+    where min_sort_order <> 1
+       or max_sort_order <> active_count
+       or primary_count <> 1
+       or distinct_sort_count <> active_count
   ) as has_duplicates
 `
 
@@ -123,13 +127,8 @@ async function hasAnyProductImageRows(pool: InitDbPool) {
   return getBooleanValue(result.rows[0], 'has_rows')
 }
 
-async function checkDuplicateActiveSortOrders(pool: InitDbPool) {
-  const result = await pool.query(PRODUCT_IMAGE_DUPLICATE_SORT_SQL)
-  return getBooleanValue(result.rows[0], 'has_duplicates')
-}
-
-async function checkDuplicateActivePrimaries(pool: InitDbPool) {
-  const result = await pool.query(PRODUCT_IMAGE_DUPLICATE_PRIMARY_SQL)
+async function hasCanonicalProductImageDrift(pool: InitDbPool) {
+  const result = await pool.query(PRODUCT_IMAGE_CANONICAL_DRIFT_SQL)
   return getBooleanValue(result.rows[0], 'has_duplicates')
 }
 
@@ -147,7 +146,19 @@ async function detectProductImageRepairNeed(pool: InitDbPool) {
   }
 
   if (hasCurrentIndexes) {
-    return { hasLegacyIndexes, hasCurrentIndexes, needsRepair: false }
+    const hasRows = await hasAnyProductImageRows(pool)
+
+    if (!hasRows) {
+      return { hasLegacyIndexes, hasCurrentIndexes, needsRepair: false }
+    }
+
+    const hasCanonicalDrift = await hasCanonicalProductImageDrift(pool)
+
+    return {
+      hasLegacyIndexes,
+      hasCurrentIndexes,
+      needsRepair: hasCanonicalDrift,
+    }
   }
 
   const hasRows = await hasAnyProductImageRows(pool)
@@ -156,16 +167,15 @@ async function detectProductImageRepairNeed(pool: InitDbPool) {
     return { hasLegacyIndexes, hasCurrentIndexes, needsRepair: false }
   }
 
-  const hasDuplicateActiveSortOrders = await checkDuplicateActiveSortOrders(pool)
-  const hasDuplicateActivePrimaries = await checkDuplicateActivePrimaries(pool)
+  const hasCanonicalDrift = await hasCanonicalProductImageDrift(pool)
 
   return {
     hasLegacyIndexes,
     hasCurrentIndexes,
     needsRepair: needsProductImageRepair({
       hasLegacyIndexes,
-      hasDuplicateActiveSortOrders,
-      hasDuplicateActivePrimaries,
+      hasActiveRows: hasRows,
+      hasCanonicalDrift,
     }),
   }
 }

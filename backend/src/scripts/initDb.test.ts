@@ -6,8 +6,7 @@ type Scenario = {
   legacyIndexNames: string[]
   currentIndexNames: string[]
   hasRows: boolean
-  duplicateActiveSortOrders: boolean
-  duplicateActivePrimaries: boolean
+  hasCanonicalDrift: boolean
 }
 
 function makePool(scenario: Scenario) {
@@ -19,8 +18,7 @@ function makePool(scenario: Scenario) {
     legacyIndexNames: [...scenario.legacyIndexNames],
     currentIndexNames: [...scenario.currentIndexNames],
     hasRows: scenario.hasRows,
-    duplicateActiveSortOrders: scenario.duplicateActiveSortOrders,
-    duplicateActivePrimaries: scenario.duplicateActivePrimaries,
+    hasCanonicalDrift: scenario.hasCanonicalDrift,
   }
 
   return {
@@ -56,18 +54,11 @@ function makePool(scenario: Scenario) {
       }
 
       if (
-        normalized.includes('group by sku_id, sort_order') &&
-        normalized.includes('having count(*) > 1')
+        normalized.includes('count(*) as active_count') &&
+        normalized.includes('distinct_sort_count') &&
+        normalized.includes('primary_count')
       ) {
-        return { rows: [{ has_duplicates: state.duplicateActiveSortOrders }] }
-      }
-
-      if (
-        normalized.includes('where status = \'active\' and is_primary') &&
-        normalized.includes('group by sku_id') &&
-        normalized.includes('having count(*) > 1')
-      ) {
-        return { rows: [{ has_duplicates: state.duplicateActivePrimaries }] }
+        return { rows: [{ has_duplicates: state.hasCanonicalDrift }] }
       }
 
       if (normalized.startsWith('with normalized_active_images as')) {
@@ -128,8 +119,7 @@ test('runInitDb skips repair on clean steady-state boot', async () => {
     legacyIndexNames: [],
     currentIndexNames: [],
     hasRows: false,
-    duplicateActiveSortOrders: false,
-    duplicateActivePrimaries: false,
+    hasCanonicalDrift: false,
   })
 
   await runInitDb(pool, SCHEMA_SQL)
@@ -157,8 +147,7 @@ test('runInitDb repairs legacy product image indexes and duplicate rows', async 
     legacyIndexNames: ['product_images_sku_sort_idx', 'product_images_primary_idx'],
     currentIndexNames: [],
     hasRows: true,
-    duplicateActiveSortOrders: true,
-    duplicateActivePrimaries: true,
+    hasCanonicalDrift: true,
   })
 
   await runInitDb(pool, SCHEMA_SQL)
@@ -173,8 +162,7 @@ test('runInitDb repairs inconsistent rows even without legacy index names', asyn
     legacyIndexNames: [],
     currentIndexNames: [],
     hasRows: true,
-    duplicateActiveSortOrders: true,
-    duplicateActivePrimaries: true,
+    hasCanonicalDrift: true,
   })
 
   await runInitDb(pool, SCHEMA_SQL)
@@ -182,5 +170,8 @@ test('runInitDb repairs inconsistent rows even without legacy index names', asyn
   assert.equal(pool.state.repairRan, true)
   assert.equal(pool.state.droppedLegacyIndexes, false)
   assert.equal(pool.state.currentIndexesCreated, true)
-  assert.equal(pool.queries.some((sql) => sql.includes('group by sku_id, sort_order')), true)
+  assert.equal(
+    pool.queries.some((sql) => sql.includes('distinct_sort_count') && sql.includes('primary_count')),
+    true
+  )
 })

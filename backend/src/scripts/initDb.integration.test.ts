@@ -143,6 +143,70 @@ async function seedLegacyDuplicateState(pool: Pool, includeLegacyIndexes: boolea
   }
 }
 
+async function seedGappedNoPrimaryState(pool: Pool) {
+  await pool.query(`
+    create table if not exists skus (
+      sku_id uuid primary key,
+      name text not null,
+      status text not null default 'active'
+    );
+  `)
+
+  await pool.query(`
+    create table if not exists product_images (
+      image_id uuid primary key,
+      sku_id uuid not null references skus(sku_id) on delete cascade,
+      storage_key text not null unique,
+      original_relpath text not null,
+      thumb_relpath text not null,
+      mime_type text not null,
+      file_ext text not null,
+      file_size bigint not null,
+      width integer not null,
+      height integer not null,
+      sha256 text not null,
+      sort_order integer not null,
+      is_primary boolean not null default false,
+      status text not null default 'active',
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+  `)
+
+  await pool.query(`
+    insert into skus (sku_id, name)
+    values ('22222222-2222-2222-2222-222222222222', 'gap sku');
+  `)
+
+  await pool.query(`
+    insert into product_images (
+      image_id, sku_id, storage_key, original_relpath, thumb_relpath,
+      mime_type, file_ext, file_size, width, height, sha256,
+      sort_order, is_primary, status, created_at, updated_at
+    ) values
+      ('cccccccc-cccc-cccc-cccc-cccccccccccc', '22222222-2222-2222-2222-222222222222', 'gap/c', 'c', 'c', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-c', 20, false, 'active', '2026-04-01 11:00:00+00', '2026-04-01 11:00:00+00'),
+      ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '22222222-2222-2222-2222-222222222222', 'gap/a', 'a', 'a', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-a', 20, false, 'active', '2026-04-01 11:01:00+00', '2026-04-01 11:01:00+00'),
+      ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '22222222-2222-2222-2222-222222222222', 'gap/b', 'b', 'b', 'image/jpeg', 'jpg', 1, 10, 10, 'hash-b', 40, false, 'active', '2026-04-01 11:02:00+00', '2026-04-01 11:02:00+00');
+  `)
+}
+
+async function seedPartialProductImagesTable(pool: Pool) {
+  await pool.query(`
+    create table if not exists skus (
+      sku_id uuid primary key,
+      name text not null,
+      status text not null default 'active'
+    );
+  `)
+
+  await pool.query(`
+    create table if not exists product_images (
+      image_id uuid primary key,
+      sku_id uuid
+    );
+  `)
+}
+
 async function readProductImageState(pool: Pool) {
   const rows = await pool.query<{
     image_id: string
@@ -169,9 +233,21 @@ async function readProductImageState(pool: Pool) {
   }
 }
 
+async function readProductImageColumns(pool: Pool) {
+  const columns = await pool.query<{ column_name: string }>(`
+    select column_name
+    from information_schema.columns
+    where table_schema = current_schema()
+      and table_name = 'product_images'
+    order by column_name
+  `)
+
+  return columns.rows.map((row) => row.column_name)
+}
+
 const schemaSql = readFileSync(path.resolve(process.cwd(), 'db/init.sql'), 'utf8')
 
-dbTest('db:init handles clean, legacy, and inconsistent postgres states', async () => {
+dbTest('db:init converges clean, legacy, gapped, and partial postgres states', async () => {
   await withDisposablePostgres(async (pool) => {
     await runInitDb(pool, schemaSql)
     await runInitDb(pool, schemaSql)
@@ -230,6 +306,55 @@ dbTest('db:init handles clean, legacy, and inconsistent postgres states', async 
       'product_images_pkey',
       'product_images_status_idx',
       'product_images_storage_key_key',
+    ])
+  })
+
+  await withDisposablePostgres(async (pool) => {
+    await seedGappedNoPrimaryState(pool)
+    await runInitDb(pool, schemaSql)
+
+    const state = await readProductImageState(pool)
+    assert.deepEqual(
+      state.rows.map((row) => [row.image_id, row.sort_order, row.is_primary]),
+      [
+        ['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 1, true],
+        ['cccccccc-cccc-cccc-cccc-cccccccccccc', 2, false],
+        ['bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 3, false],
+      ]
+    )
+    assert.ok(state.rows.every((row) => row.updated_at.getTime() > new Date('2026-04-01T00:00:00Z').getTime()))
+    assert.deepEqual(state.indexes, [
+      'product_images_active_primary_uidx',
+      'product_images_active_sku_sort_uidx',
+      'product_images_pkey',
+      'product_images_status_idx',
+      'product_images_storage_key_key',
+    ])
+  })
+
+  await withDisposablePostgres(async (pool) => {
+    await seedPartialProductImagesTable(pool)
+    await runInitDb(pool, schemaSql)
+
+    const columns = await readProductImageColumns(pool)
+    assert.deepEqual(columns, [
+      'created_at',
+      'deleted_at',
+      'file_ext',
+      'file_size',
+      'height',
+      'image_id',
+      'is_primary',
+      'mime_type',
+      'original_relpath',
+      'sha256',
+      'sku_id',
+      'sort_order',
+      'status',
+      'storage_key',
+      'thumb_relpath',
+      'updated_at',
+      'width',
     ])
   })
 })

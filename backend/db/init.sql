@@ -76,6 +76,39 @@ create table if not exists product_images (
 );
 
 alter table if exists product_images
+  add column if not exists image_id uuid;
+
+alter table if exists product_images
+  add column if not exists sku_id uuid;
+
+alter table if exists product_images
+  add column if not exists storage_key text;
+
+alter table if exists product_images
+  add column if not exists original_relpath text;
+
+alter table if exists product_images
+  add column if not exists thumb_relpath text;
+
+alter table if exists product_images
+  add column if not exists mime_type text;
+
+alter table if exists product_images
+  add column if not exists file_ext text;
+
+alter table if exists product_images
+  add column if not exists file_size bigint;
+
+alter table if exists product_images
+  add column if not exists width integer;
+
+alter table if exists product_images
+  add column if not exists height integer;
+
+alter table if exists product_images
+  add column if not exists sha256 text;
+
+alter table if exists product_images
   add column if not exists sort_order integer not null default 1;
 
 alter table if exists product_images

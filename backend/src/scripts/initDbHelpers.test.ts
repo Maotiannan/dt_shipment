@@ -16,8 +16,8 @@ test('needsProductImageRepair triggers for legacy indexes or integrity violation
   assert.equal(
     needsProductImageRepair({
       hasLegacyIndexes: false,
-      hasDuplicateActiveSortOrders: false,
-      hasDuplicateActivePrimaries: false,
+      hasActiveRows: false,
+      hasCanonicalDrift: false,
     }),
     false
   )
@@ -25,8 +25,8 @@ test('needsProductImageRepair triggers for legacy indexes or integrity violation
   assert.equal(
     needsProductImageRepair({
       hasLegacyIndexes: true,
-      hasDuplicateActiveSortOrders: false,
-      hasDuplicateActivePrimaries: false,
+      hasActiveRows: false,
+      hasCanonicalDrift: false,
     }),
     true
   )
@@ -34,8 +34,8 @@ test('needsProductImageRepair triggers for legacy indexes or integrity violation
   assert.equal(
     needsProductImageRepair({
       hasLegacyIndexes: false,
-      hasDuplicateActiveSortOrders: true,
-      hasDuplicateActivePrimaries: false,
+      hasActiveRows: true,
+      hasCanonicalDrift: true,
     }),
     true
   )
