@@ -17,6 +17,12 @@ export type PersistedProductImageFile = {
   sha256: string
 }
 
+export class InvalidProductImageFileError extends Error {
+  constructor(message = 'uploaded file is not a valid image') {
+    super(message)
+  }
+}
+
 function fileExtensionFromMime(mimeType: string) {
   if (mimeType === 'image/png') return '.png'
   if (mimeType === 'image/webp') return '.webp'
@@ -49,17 +55,31 @@ export async function persistProductImage(
   const originalAbsPath = resolveWithinRoot(config.rootDir, originalRelpath)
   const thumbAbsPath = resolveWithinRoot(config.rootDir, thumbRelpath)
   const fileBuffer = await fs.readFile(params.sourcePath)
+  let metadata: sharp.Metadata
+  let thumbBuffer: Buffer
+
+  try {
+    metadata = await sharp(fileBuffer).metadata()
+    thumbBuffer = await sharp(fileBuffer)
+      .resize({ width: config.thumbWidth, withoutEnlargement: true })
+      .jpeg({ quality: 82 })
+      .toBuffer()
+  } catch {
+    throw new InvalidProductImageFileError()
+  }
 
   await fs.mkdir(path.dirname(originalAbsPath), { recursive: true })
   await fs.mkdir(path.dirname(thumbAbsPath), { recursive: true })
-  await fs.writeFile(originalAbsPath, fileBuffer)
 
-  const originalImage = sharp(fileBuffer)
-  const metadata = await originalImage.metadata()
-  await originalImage
-    .resize({ width: config.thumbWidth, withoutEnlargement: true })
-    .jpeg({ quality: 82 })
-    .toFile(thumbAbsPath)
+  try {
+    await Promise.all([
+      fs.writeFile(originalAbsPath, fileBuffer),
+      fs.writeFile(thumbAbsPath, thumbBuffer),
+    ])
+  } catch (error) {
+    await removePersistedProductImage({ originalAbsPath, thumbAbsPath }).catch(() => undefined)
+    throw error
+  }
 
   return {
     originalRelpath,

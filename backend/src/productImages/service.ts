@@ -10,6 +10,7 @@ import {
   skuExists,
 } from './repository.js'
 import {
+  InvalidProductImageFileError,
   persistProductImage,
   readStoredProductImage,
   removePersistedProductImage,
@@ -116,16 +117,24 @@ export async function uploadProductImages(
 
     for (const [index, file] of files.entries()) {
       const imageId = randomUUID()
-      const storedFile = await persistProductImage(
-        {
-          skuId: params.skuId,
-          imageId,
-          sourcePath: file.path,
-          originalFilename: file.originalname,
-          mimeType: file.mimetype,
-        },
-        env
-      )
+      let storedFile
+      try {
+        storedFile = await persistProductImage(
+          {
+            skuId: params.skuId,
+            imageId,
+            sourcePath: file.path,
+            originalFilename: file.originalname,
+            mimeType: file.mimetype,
+          },
+          env
+        )
+      } catch (error) {
+        if (error instanceof InvalidProductImageFileError) {
+          throw new ProductImageServiceError(error.message, 400)
+        }
+        throw error
+      }
 
       persistedPaths.push({
         originalAbsPath: storedFile.originalAbsPath,
