@@ -26,6 +26,33 @@ create index if not exists product_images_status_idx
   on product_images(status, deleted_at);
 `
 
+const PRODUCT_IMAGE_CANONICAL_INDEX_SPECS = [
+  {
+    indexName: 'product_images_active_sku_sort_uidx',
+    expectedTokens: [
+      'create unique index product_images_active_sku_sort_uidx',
+      'on product_images using btree (sku_id, sort_order)',
+      "where (status = 'active'::text)",
+    ],
+  },
+  {
+    indexName: 'product_images_active_primary_uidx',
+    expectedTokens: [
+      'create unique index product_images_active_primary_uidx',
+      'on product_images using btree (sku_id)',
+      "where ((status = 'active'::text) and is_primary)",
+    ],
+  },
+  {
+    indexName: 'product_images_status_idx',
+    expectedTokens: [
+      'create index product_images_status_idx',
+      'on product_images using btree (status, deleted_at)',
+    ],
+    forbiddenTokens: ['unique'],
+  },
+] as const
+
 const LEGACY_PRODUCT_IMAGE_SKU_ID = '00000000-0000-0000-0000-000000000001'
 const LEGACY_PRODUCT_IMAGE_STORAGE_KEY_PREFIX = 'legacy-product-image-'
 
@@ -159,8 +186,8 @@ const CURRENT_PRODUCT_IMAGE_INDEX_SQL = `
     )
 `
 
-const PRODUCT_IMAGE_BOOTSTRAP_INDEX_SQL = `
-  select indexname
+const PRODUCT_IMAGE_INDEX_DEFINITIONS_SQL = `
+  select indexname, indexdef
   from pg_indexes
   where schemaname = current_schema()
     and tablename = 'product_images'
@@ -290,6 +317,25 @@ type ProductImageKeyConflicts = {
   hasDuplicateStorageKeys: boolean
 }
 
+const PRODUCT_IMAGE_NOT_NULL_COLUMNS = [
+  'image_id',
+  'sku_id',
+  'storage_key',
+  'original_relpath',
+  'thumb_relpath',
+  'mime_type',
+  'file_ext',
+  'file_size',
+  'width',
+  'height',
+  'sha256',
+  'sort_order',
+  'is_primary',
+  'status',
+  'created_at',
+  'updated_at',
+] as const
+
 const REQUIRED_PRODUCT_IMAGE_COLUMN_DEFINITIONS = [
   { columnName: 'image_id', shouldBeNotNull: true, defaultTokenGroups: [['gen_random_uuid()']] },
   { columnName: 'sku_id', shouldBeNotNull: true },
@@ -394,6 +440,42 @@ async function hasProductImageKeyConflicts(pool: InitDbPool) {
   return conflicts
 }
 
+function normalizeIndexDefinition(indexDefinition: string) {
+  return indexDefinition.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function hasCanonicalIndexShape(indexName: string, indexDefinition: string | undefined) {
+  if (!indexDefinition) {
+    return false
+  }
+
+  const normalized = normalizeIndexDefinition(indexDefinition).replace(/public\./g, '')
+  const spec = PRODUCT_IMAGE_CANONICAL_INDEX_SPECS.find((candidate) => candidate.indexName === indexName)
+
+  if (!spec) {
+    return false
+  }
+
+  const hasAllExpectedTokens = spec.expectedTokens.every((token) => normalized.includes(token))
+  const hasForbiddenTokens =
+    'forbiddenTokens' in spec
+      ? spec.forbiddenTokens.some((token: string) => normalized.includes(token))
+      : false
+
+  return hasAllExpectedTokens && !hasForbiddenTokens
+}
+
+async function hasCanonicalProductImageIndexes(pool: InitDbPool) {
+  const result = await pool.query(PRODUCT_IMAGE_INDEX_DEFINITIONS_SQL)
+  const definitions = new Map(
+    result.rows.map((row) => [String(row.indexname), String(row.indexdef)] as const)
+  )
+
+  return PRODUCT_IMAGE_CANONICAL_INDEX_SPECS.every((spec) =>
+    hasCanonicalIndexShape(spec.indexName, definitions.get(spec.indexName))
+  )
+}
+
 async function detectProductImageSchemaRepairNeed(pool: InitDbPool) {
   const columns = await getProductImageColumns(pool)
   const columnMap = new Map(columns.map((column) => [column.column_name, column]))
@@ -447,6 +529,13 @@ function needsProductImageSchemaRepair(preflight: ProductImageSchemaDrift) {
 }
 
 async function repairProductImageSchema(pool: InitDbPool, preflight: ProductImageSchemaDrift) {
+  const columnsRequiringNotNull = new Set(
+    PRODUCT_IMAGE_NOT_NULL_COLUMNS.filter(
+      (columnName) =>
+        preflight.missingNotNullColumns.has(columnName) || preflight.missingColumns.has(columnName)
+    )
+  )
+
   const addColumnStatements = []
 
   if (preflight.missingColumns.has('image_id')) {
@@ -688,67 +777,67 @@ async function repairProductImageSchema(pool: InitDbPool, preflight: ProductImag
     await pool.query(`alter table if exists product_images alter column updated_at set default now();`)
   }
 
-  if (preflight.missingNotNullColumns.has('image_id')) {
+  if (columnsRequiringNotNull.has('image_id')) {
     await pool.query(`alter table if exists product_images alter column image_id set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('sku_id')) {
+  if (columnsRequiringNotNull.has('sku_id')) {
     await pool.query(`alter table if exists product_images alter column sku_id set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('storage_key')) {
+  if (columnsRequiringNotNull.has('storage_key')) {
     await pool.query(`alter table if exists product_images alter column storage_key set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('original_relpath')) {
+  if (columnsRequiringNotNull.has('original_relpath')) {
     await pool.query(`alter table if exists product_images alter column original_relpath set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('thumb_relpath')) {
+  if (columnsRequiringNotNull.has('thumb_relpath')) {
     await pool.query(`alter table if exists product_images alter column thumb_relpath set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('mime_type')) {
+  if (columnsRequiringNotNull.has('mime_type')) {
     await pool.query(`alter table if exists product_images alter column mime_type set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('file_ext')) {
+  if (columnsRequiringNotNull.has('file_ext')) {
     await pool.query(`alter table if exists product_images alter column file_ext set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('file_size')) {
+  if (columnsRequiringNotNull.has('file_size')) {
     await pool.query(`alter table if exists product_images alter column file_size set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('width')) {
+  if (columnsRequiringNotNull.has('width')) {
     await pool.query(`alter table if exists product_images alter column width set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('height')) {
+  if (columnsRequiringNotNull.has('height')) {
     await pool.query(`alter table if exists product_images alter column height set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('sha256')) {
+  if (columnsRequiringNotNull.has('sha256')) {
     await pool.query(`alter table if exists product_images alter column sha256 set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('sort_order')) {
+  if (columnsRequiringNotNull.has('sort_order')) {
     await pool.query(`alter table if exists product_images alter column sort_order set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('is_primary')) {
+  if (columnsRequiringNotNull.has('is_primary')) {
     await pool.query(`alter table if exists product_images alter column is_primary set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('status')) {
+  if (columnsRequiringNotNull.has('status')) {
     await pool.query(`alter table if exists product_images alter column status set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('created_at')) {
+  if (columnsRequiringNotNull.has('created_at')) {
     await pool.query(`alter table if exists product_images alter column created_at set not null;`)
   }
 
-  if (preflight.missingNotNullColumns.has('updated_at')) {
+  if (columnsRequiringNotNull.has('updated_at')) {
     await pool.query(`alter table if exists product_images alter column updated_at set not null;`)
   }
 
@@ -774,6 +863,33 @@ async function repairProductImageSchema(pool: InitDbPool, preflight: ProductImag
         references skus(sku_id)
         on delete cascade;
     `)
+  }
+}
+
+async function repairProductImageIndexes(pool: InitDbPool) {
+  const result = await pool.query(PRODUCT_IMAGE_INDEX_DEFINITIONS_SQL)
+  const definitions = new Map(
+    result.rows.map((row) => [String(row.indexname), String(row.indexdef)] as const)
+  )
+
+  for (const spec of PRODUCT_IMAGE_CANONICAL_INDEX_SPECS) {
+    if (hasCanonicalIndexShape(spec.indexName, definitions.get(spec.indexName))) {
+      continue
+    }
+
+    await pool.query(`drop index if exists ${spec.indexName};`)
+
+    if (spec.indexName === 'product_images_active_sku_sort_uidx') {
+      await pool.query(PRODUCT_IMAGE_ACTIVE_SKU_SORT_INDEX_SQL)
+      continue
+    }
+
+    if (spec.indexName === 'product_images_active_primary_uidx') {
+      await pool.query(PRODUCT_IMAGE_ACTIVE_PRIMARY_INDEX_SQL)
+      continue
+    }
+
+    await pool.query(PRODUCT_IMAGE_STATUS_INDEX_SQL)
   }
 }
 
@@ -835,6 +951,9 @@ export async function runInitDb(pool: InitDbPool, schemaSql: string) {
       )
     }
 
+    // Keep full bootstrap semantics intact. The no-op guarantee is limited to
+    // product_images convergence and repair, which is the part we can safely
+    // make definition-aware without masking future schema additions.
     await client.query('create extension if not exists pgcrypto;')
     await client.query(schemaSql)
 
@@ -854,19 +973,7 @@ export async function runInitDb(pool: InitDbPool, schemaSql: string) {
       }
     }
 
-    const currentIndexNames = await listIndexNames(client, PRODUCT_IMAGE_BOOTSTRAP_INDEX_SQL)
-
-    if (!currentIndexNames.includes('product_images_active_sku_sort_uidx')) {
-      await client.query(PRODUCT_IMAGE_ACTIVE_SKU_SORT_INDEX_SQL)
-    }
-
-    if (!currentIndexNames.includes('product_images_active_primary_uidx')) {
-      await client.query(PRODUCT_IMAGE_ACTIVE_PRIMARY_INDEX_SQL)
-    }
-
-    if (!currentIndexNames.includes('product_images_status_idx')) {
-      await client.query(PRODUCT_IMAGE_STATUS_INDEX_SQL)
-    }
+    await repairProductImageIndexes(client)
   }
 
   const connect = pool.connect

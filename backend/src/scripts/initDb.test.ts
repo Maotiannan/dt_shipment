@@ -5,8 +5,11 @@ import { runInitDb } from './initDbRunner.js'
 type Scenario = {
   legacyIndexNames: string[]
   currentIndexNames: string[]
+  currentIndexDefinitions: Record<string, string>
   hasRows: boolean
   hasCanonicalDrift: boolean
+  hasPgcryptoExtension: boolean
+  tableCount: number
 }
 
 function makePool(scenario: Scenario) {
@@ -17,8 +20,11 @@ function makePool(scenario: Scenario) {
   const state = {
     legacyIndexNames: [...scenario.legacyIndexNames],
     currentIndexNames: [...scenario.currentIndexNames],
+    currentIndexDefinitions: { ...scenario.currentIndexDefinitions },
     hasRows: scenario.hasRows,
     hasCanonicalDrift: scenario.hasCanonicalDrift,
+    hasPgcryptoExtension: scenario.hasPgcryptoExtension,
+    tableCount: scenario.tableCount,
   }
 
   return {
@@ -31,10 +37,12 @@ function makePool(scenario: Scenario) {
       queries.push(normalized)
 
       if (normalized === 'create extension if not exists pgcrypto;') {
+        state.hasPgcryptoExtension = true
         return { rows: [] }
       }
 
       if (normalized === 'schema-sql') {
+        state.tableCount = 5
         return { rows: [] }
       }
 
@@ -89,6 +97,15 @@ function makePool(scenario: Scenario) {
       }
 
       if (normalized.includes("from pg_indexes") && normalized.includes("product_images_sku_sort_idx")) {
+        if (normalized.includes('indexdef')) {
+          return {
+            rows: state.legacyIndexNames.map((indexname) => ({
+              indexname,
+              indexdef: state.currentIndexDefinitions[indexname] ?? '',
+            })),
+          }
+        }
+
         return { rows: state.legacyIndexNames.map((indexname) => ({ indexname })) }
       }
 
@@ -96,7 +113,27 @@ function makePool(scenario: Scenario) {
         normalized.includes("from pg_indexes") &&
         normalized.includes("product_images_active_sku_sort_uidx")
       ) {
+        if (normalized.includes('indexdef')) {
+          return {
+            rows: state.currentIndexNames.map((indexname) => ({
+              indexname,
+              indexdef: state.currentIndexDefinitions[indexname] ?? '',
+            })),
+          }
+        }
+
         return { rows: state.currentIndexNames.map((indexname) => ({ indexname })) }
+      }
+
+      if (normalized.includes('from pg_extension') && normalized.includes("extname = 'pgcrypto'")) {
+        return { rows: [{ has_pgcrypto: state.hasPgcryptoExtension }] }
+      }
+
+      if (
+        normalized.includes('from information_schema.tables') &&
+        normalized.includes('table_name = any (array[')
+      ) {
+        return { rows: [{ table_count: state.tableCount }] }
       }
 
       if (normalized.includes('select exists ( select 1 from product_images limit 1 ) as has_rows')) {
@@ -154,6 +191,8 @@ function makePool(scenario: Scenario) {
         state.currentIndexNames = [
           ...new Set([...state.currentIndexNames, 'product_images_active_sku_sort_uidx']),
         ]
+        state.currentIndexDefinitions.product_images_active_sku_sort_uidx =
+          'create unique index product_images_active_sku_sort_uidx on product_images using btree (sku_id, sort_order) where (status = \'active\'::text)'
         return { rows: [] }
       }
 
@@ -162,12 +201,40 @@ function makePool(scenario: Scenario) {
         state.currentIndexNames = [
           ...new Set([...state.currentIndexNames, 'product_images_active_primary_uidx']),
         ]
+        state.currentIndexDefinitions.product_images_active_primary_uidx =
+          'create unique index product_images_active_primary_uidx on product_images using btree (sku_id) where ((status = \'active\'::text) and is_primary)'
         return { rows: [] }
       }
 
       if (normalized.startsWith('create index if not exists product_images_status_idx')) {
         currentIndexesCreated = true
         state.currentIndexNames = [...new Set([...state.currentIndexNames, 'product_images_status_idx'])]
+        state.currentIndexDefinitions.product_images_status_idx =
+          'create index product_images_status_idx on product_images using btree (status, deleted_at)'
+        return { rows: [] }
+      }
+
+      if (normalized.startsWith('drop index if exists product_images_active_sku_sort_uidx')) {
+        state.currentIndexNames = state.currentIndexNames.filter(
+          (indexname) => indexname !== 'product_images_active_sku_sort_uidx'
+        )
+        delete state.currentIndexDefinitions.product_images_active_sku_sort_uidx
+        return { rows: [] }
+      }
+
+      if (normalized.startsWith('drop index if exists product_images_active_primary_uidx')) {
+        state.currentIndexNames = state.currentIndexNames.filter(
+          (indexname) => indexname !== 'product_images_active_primary_uidx'
+        )
+        delete state.currentIndexDefinitions.product_images_active_primary_uidx
+        return { rows: [] }
+      }
+
+      if (normalized.startsWith('drop index if exists product_images_status_idx')) {
+        state.currentIndexNames = state.currentIndexNames.filter(
+          (indexname) => indexname !== 'product_images_status_idx'
+        )
+        delete state.currentIndexDefinitions.product_images_status_idx
         return { rows: [] }
       }
 
@@ -185,8 +252,11 @@ test('runInitDb skips repair on clean steady-state boot', async () => {
   const pool = makePool({
     legacyIndexNames: [],
     currentIndexNames: [],
+    currentIndexDefinitions: {},
     hasRows: false,
     hasCanonicalDrift: false,
+    hasPgcryptoExtension: false,
+    tableCount: 0,
   })
 
   await runInitDb(pool, SCHEMA_SQL)
@@ -207,14 +277,38 @@ test('runInitDb skips repair on clean steady-state boot', async () => {
   assert.equal(pool.state.repairRan, false)
   assert.equal(pool.queries.some((sql) => sql.includes('group by sku_id, sort_order')), false)
   assert.equal(pool.queries.some((sql) => sql.includes('group by sku_id') && sql.includes('is_primary')), false)
+  assert.equal(
+    pool.queries.some((sql) => sql.startsWith('alter table if exists product_images alter column')),
+    false
+  )
+  assert.equal(
+    pool.queries.some((sql) => sql.startsWith('alter table if exists product_images add constraint')),
+    false
+  )
+  assert.equal(pool.queries.some((sql) => sql.startsWith('with legacy_rows as (')), false)
+  assert.equal(
+    pool.queries.some((sql) => sql.startsWith('create unique index if not exists product_images_active_sku_sort_uidx')),
+    false
+  )
+  assert.equal(
+    pool.queries.some((sql) => sql.startsWith('create unique index if not exists product_images_active_primary_uidx')),
+    false
+  )
+  assert.equal(
+    pool.queries.some((sql) => sql.startsWith('create index if not exists product_images_status_idx')),
+    false
+  )
 })
 
 test('runInitDb repairs legacy product image indexes and duplicate rows', async () => {
   const pool = makePool({
     legacyIndexNames: ['product_images_sku_sort_idx', 'product_images_primary_idx'],
     currentIndexNames: [],
+    currentIndexDefinitions: {},
     hasRows: true,
     hasCanonicalDrift: true,
+    hasPgcryptoExtension: false,
+    tableCount: 0,
   })
 
   await runInitDb(pool, SCHEMA_SQL)
@@ -228,8 +322,11 @@ test('runInitDb repairs inconsistent rows even without legacy index names', asyn
   const pool = makePool({
     legacyIndexNames: [],
     currentIndexNames: [],
+    currentIndexDefinitions: {},
     hasRows: true,
     hasCanonicalDrift: true,
+    hasPgcryptoExtension: false,
+    tableCount: 0,
   })
 
   await runInitDb(pool, SCHEMA_SQL)

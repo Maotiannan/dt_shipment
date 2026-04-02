@@ -266,6 +266,36 @@ async function seedPartialProductImagesDuplicateStorageKeyState(pool: Pool) {
   `)
 }
 
+async function seedPartialProductImagesDuplicateImageIdState(pool: Pool) {
+  await seedPartialProductImagesTable(pool)
+
+  await pool.query(`
+    insert into product_images (image_id, sku_id, storage_key)
+    values
+      ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '66666666-6666-6666-6666-666666666666', 'dup-image-a'),
+      ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '66666666-6666-6666-6666-666666666666', 'dup-image-b');
+  `)
+}
+
+async function seedWrongDefinitionProductImageIndexes(pool: Pool) {
+  await seedWrongPrimaryState(pool)
+
+  await pool.query(`
+    create index product_images_active_sku_sort_uidx
+      on product_images(sku_id, sort_order);
+  `)
+
+  await pool.query(`
+    create index product_images_active_primary_uidx
+      on product_images(sku_id);
+  `)
+
+  await pool.query(`
+    create index product_images_status_idx
+      on product_images(status);
+  `)
+}
+
 async function seedPartialProductImagesCompositeUniqueState(pool: Pool) {
   await seedPartialProductImagesTable(pool)
 
@@ -409,9 +439,30 @@ async function readProductImageConstraintNames(pool: Pool) {
   return constraints.rows.map((row) => `${row.conname}:${row.contype}`)
 }
 
+async function readProductImageIndexDefinitions(pool: Pool) {
+  const indexes = await pool.query<{ indexname: string; indexdef: string }>(`
+    select indexname, indexdef
+    from pg_indexes
+    where schemaname = current_schema()
+      and tablename = 'product_images'
+      and indexname in (
+        'product_images_active_sku_sort_uidx',
+        'product_images_active_primary_uidx',
+        'product_images_status_idx'
+      )
+    order by indexname
+  `)
+
+  return Object.fromEntries(indexes.rows.map((row) => [row.indexname, row.indexdef]))
+}
+
+function normalizeIndexDefinition(indexDef: string) {
+  return indexDef.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
 const schemaSql = readFileSync(path.resolve(process.cwd(), 'db/init.sql'), 'utf8')
 
-dbTest('db:init converges clean, legacy, gapped, and partial postgres states', async () => {
+dbTest('db:init leaves product_images convergence no-op on clean steady-state boot', async () => {
   await withDisposablePostgres(async (pool) => {
     const recordingPool = createRecordingPool(pool)
 
@@ -420,6 +471,7 @@ dbTest('db:init converges clean, legacy, gapped, and partial postgres states', a
     await runInitDb(recordingPool, schemaSql)
 
     assert.equal(countSchemaMutationQueries(recordingPool.queries), 0)
+    assert.equal(recordingPool.queries.length > 0, true)
 
     const state = await readProductImageState(pool)
     assert.equal(state.rows.length, 0)
@@ -604,6 +656,79 @@ dbTest('db:init converges clean, legacy, gapped, and partial postgres states', a
         storage_key: 'dup-storage',
       },
     ])
+  })
+
+  await withDisposablePostgres(async (pool) => {
+    await seedPartialProductImagesDuplicateImageIdState(pool)
+    const recordingPool = createRecordingPool(pool)
+
+    await assert.rejects(() => runInitDb(recordingPool, schemaSql), /duplicate image_id or storage_key values/)
+    assert.equal(countSchemaMutationQueries(recordingPool.queries), 0)
+
+    const rows = await pool.query<{
+      image_id: string
+      sku_id: string
+      storage_key: string
+    }>(`
+      select image_id, sku_id, storage_key
+      from product_images
+      order by storage_key
+    `)
+
+    assert.deepEqual(rows.rows, [
+      {
+        image_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        sku_id: '66666666-6666-6666-6666-666666666666',
+        storage_key: 'dup-image-a',
+      },
+      {
+        image_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        sku_id: '66666666-6666-6666-6666-666666666666',
+        storage_key: 'dup-image-b',
+      },
+    ])
+  })
+
+  await withDisposablePostgres(async (pool) => {
+    await seedWrongDefinitionProductImageIndexes(pool)
+    await runInitDb(pool, schemaSql)
+
+    const indexDefinitions = await readProductImageIndexDefinitions(pool)
+    const activePrimaryIndexDef = normalizeIndexDefinition(
+      indexDefinitions.product_images_active_primary_uidx
+    )
+    const activeSkuSortIndexDef = normalizeIndexDefinition(
+      indexDefinitions.product_images_active_sku_sort_uidx
+    )
+    const statusIndexDef = normalizeIndexDefinition(indexDefinitions.product_images_status_idx)
+
+    assert.ok(
+      activePrimaryIndexDef.includes(
+        'create unique index product_images_active_primary_uidx'
+      )
+    )
+    assert.ok(
+      activePrimaryIndexDef.includes(
+        'where ((status = \'active\'::text) and is_primary)'
+      )
+    )
+    assert.ok(
+      activeSkuSortIndexDef.includes(
+        'create unique index product_images_active_sku_sort_uidx'
+      )
+    )
+    assert.ok(
+      activeSkuSortIndexDef.includes(
+        'where (status = \'active\'::text)'
+      )
+    )
+    assert.ok(
+      statusIndexDef.includes(
+        'create index product_images_status_idx'
+      )
+    )
+    assert.ok(statusIndexDef.includes('on public.product_images using btree (status, deleted_at)'))
+    assert.equal(statusIndexDef.includes('unique'), false)
   })
 
   await withDisposablePostgres(async (pool) => {
