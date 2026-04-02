@@ -10,3 +10,4 @@ frontend/dev-dist/
 coverage/
 *.log
 .DS_Store
+.superpowers/
