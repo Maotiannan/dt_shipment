@@ -21,3 +21,25 @@ test('loads product image config from env-like input', () => {
   assert.equal(config.thumbWidth, 480)
   assert.equal(config.trashRetentionDays, 30)
 })
+
+test('loads product image config defaults when env is empty', () => {
+  const config = loadProductImageConfig({})
+
+  assert.equal(config.rootDir, '/data/assets/products')
+  assert.equal(config.tmpDir, '/data/assets/uploads/tmp')
+  assert.equal(config.maxFiles, 12)
+  assert.equal(config.maxFileBytes, 10 * 1024 * 1024)
+  assert.deepEqual(config.allowedMimeTypes, ['image/jpeg', 'image/png', 'image/webp'])
+  assert.equal(config.thumbWidth, 480)
+  assert.equal(config.trashRetentionDays, 30)
+})
+
+test('rejects invalid numeric product image env values', () => {
+  assert.throws(
+    () =>
+      loadProductImageConfig({
+        PRODUCT_IMAGE_MAX_FILES: 'abc',
+      }),
+    /PRODUCT_IMAGE_MAX_FILES/
+  )
+})
