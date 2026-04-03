@@ -153,6 +153,150 @@ async function main() {
     throw new Error(`/api/auth/me returned unexpected user: ${JSON.stringify(me)}`)
   }
 
+  const accountA = await expectJson('/api/accounts', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      account_name: `Smoke Account A ${Date.now()}`,
+      remark: 'smoke-account-a',
+      biz_type: 'mixed',
+      status: 'active',
+    }),
+  })
+
+  const accountB = await expectJson('/api/accounts', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      account_name: `Smoke Account B ${Date.now()}`,
+      remark: 'smoke-account-b',
+      biz_type: 'mixed',
+      status: 'active',
+    }),
+  })
+
+  const orderId = `SMOKE-ORDER-${Date.now()}`
+  const createdOrder = await expectJson('/api/orders', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      order_id: orderId,
+      account_id: accountA.account_id,
+      order_type: 'wholesale',
+      buyer_name: 'Smoke Buyer',
+      shipping_address: 'Smoke Address',
+      items: [{ sku_id: null, inventory_id: null, name: 'Smoke Item', qty: 1, unit_price: 8 }],
+      total_amount: 8,
+      ship_status: 'pending',
+      tracking_number: null,
+      tracking_method: null,
+      is_abnormal: false,
+      abnormal_type: null,
+      remark: null,
+      settlement_status: 'unpaid',
+      paid_amount: 0,
+    }),
+  })
+  if (createdOrder?.order_id !== orderId) {
+    throw new Error(`order create returned unexpected payload: ${JSON.stringify(createdOrder)}`)
+  }
+
+  const fetchedOrder = await expectJson(`/api/orders/${orderId}`, {
+    headers: authHeaders,
+  })
+  if (fetchedOrder?.account_id !== accountA.account_id) {
+    throw new Error(`order detail returned unexpected payload: ${JSON.stringify(fetchedOrder)}`)
+  }
+
+  const blockedAccountDeleteRes = await fetch(`${baseUrl}/api/accounts/${accountA.account_id}`, {
+    method: 'DELETE',
+    headers: authHeaders,
+  })
+  const blockedAccountDeletePayload = await blockedAccountDeleteRes.json()
+  if (blockedAccountDeleteRes.status !== 409) {
+    throw new Error(
+      `expected account delete conflict, got ${blockedAccountDeleteRes.status}: ${JSON.stringify(blockedAccountDeletePayload)}`
+    )
+  }
+
+  const shippedAt = new Date('2026-04-03T02:00:00.000Z').toISOString()
+  const updatedOrder = await expectJson(`/api/orders/${orderId}`, {
+    method: 'PUT',
+    headers: {
+      'content-type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      account_id: accountB.account_id,
+      order_type: 'retail',
+      buyer_name: 'Smoke Buyer Updated',
+      shipping_address: 'Smoke Address Updated',
+      items: [{ sku_id: null, inventory_id: null, name: 'Smoke Item Updated', qty: 2, unit_price: 6 }],
+      total_amount: 12,
+      ship_status: 'shipped_uploaded',
+      tracking_number: 'SMOKE-YT-001',
+      tracking_method: 'platform_upload',
+      is_abnormal: true,
+      abnormal_type: 'other',
+      remark: 'smoke-order-updated',
+      settlement_status: null,
+      paid_amount: 0,
+      paid_at: null,
+      paid_remark: null,
+      shipped_at: shippedAt,
+    }),
+  })
+  if (
+    updatedOrder?.account_id !== accountB.account_id ||
+    updatedOrder?.buyer_name !== 'Smoke Buyer Updated' ||
+    updatedOrder?.tracking_number !== 'SMOKE-YT-001'
+  ) {
+    throw new Error(`order update returned unexpected payload: ${JSON.stringify(updatedOrder)}`)
+  }
+
+  const deletedOrder = await expectJson(`/api/orders/${orderId}`, {
+    method: 'DELETE',
+    headers: authHeaders,
+  })
+  if (!deletedOrder?.ok || deletedOrder.deletedOrderId !== orderId) {
+    throw new Error(`order delete returned unexpected payload: ${JSON.stringify(deletedOrder)}`)
+  }
+
+  const deletedOrderFetch = await fetch(`${baseUrl}/api/orders/${orderId}`, {
+    headers: authHeaders,
+  })
+  const deletedOrderFetchPayload = await deletedOrderFetch.json()
+  if (deletedOrderFetch.status !== 404) {
+    throw new Error(
+      `expected deleted order 404, got ${deletedOrderFetch.status}: ${JSON.stringify(deletedOrderFetchPayload)}`
+    )
+  }
+
+  const deletedAccountA = await expectJson(`/api/accounts/${accountA.account_id}`, {
+    method: 'DELETE',
+    headers: authHeaders,
+  })
+  if (!deletedAccountA?.ok || deletedAccountA.deletedAccountId !== accountA.account_id) {
+    throw new Error(`account A delete returned unexpected payload: ${JSON.stringify(deletedAccountA)}`)
+  }
+
+  const deletedAccountB = await expectJson(`/api/accounts/${accountB.account_id}`, {
+    method: 'DELETE',
+    headers: authHeaders,
+  })
+  if (!deletedAccountB?.ok || deletedAccountB.deletedAccountId !== accountB.account_id) {
+    throw new Error(`account B delete returned unexpected payload: ${JSON.stringify(deletedAccountB)}`)
+  }
+
   const sku = await expectJson('/api/skus', {
     method: 'POST',
     headers: {
@@ -379,6 +523,7 @@ async function main() {
     ok: true,
     baseUrl,
     app: meta.app,
+    orderId,
     skuId: sku.sku_id,
     uploadedImages: upload.images.length,
     cleanup,

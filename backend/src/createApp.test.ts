@@ -12,6 +12,8 @@ test('createApp wires api routes without starting the listener', () => {
   assert.ok(routes.includes('/api/meta'))
   assert.ok(routes.includes('/api/health'))
   assert.ok(routes.includes('/api/auth/login'))
+  assert.ok(routes.includes('/api/accounts/:id'))
+  assert.ok(routes.includes('/api/orders/:id'))
 })
 
 test('createApp fails fast when product image config is invalid', () => {

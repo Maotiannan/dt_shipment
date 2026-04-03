@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiRequest } from '../lib/apiClient'
-import { upsertItemById } from '../lib/collectionState'
+import { removeItemById, upsertItemById } from '../lib/collectionState'
 
 type BizType = 'wholesale' | 'retail' | 'mixed'
 type AccountStatus = 'active' | 'inactive'
@@ -160,10 +160,28 @@ export default function AccountsPage() {
     }
   }
 
+  async function handleDelete(a: FishAccount) {
+    const ok = confirm(`确定删除账号「${a.account_name}」？如果该账号已有订单，将阻止删除。`)
+    if (!ok) return
+
+    setSaving(true)
+    setErrorMsg(null)
+    try {
+      await apiRequest(`/api/accounts/${a.account_id}`, {
+        method: 'DELETE',
+      })
+      setAccounts((current) => removeItemById(current, a.account_id, (row) => row.account_id))
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : '删除账号失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="page">
       <h2 className="pageTitle">账号管理</h2>
-      <p className="pageSub">新增/编辑/停用闲鱼账号（停用不删除历史订单）。</p>
+      <p className="pageSub">新增/编辑/停用/删除闲鱼账号；若账号已有订单引用，将禁止删除。</p>
 
       <div style={{ marginTop: 14 }}>
         <input
@@ -247,7 +265,10 @@ export default function AccountsPage() {
                       </button>
                     ) : (
                       <span style={{ opacity: 0.7, fontSize: 12 }}>已停用</span>
-                    )}
+                    )}{' '}
+                    <button className="ghostBtn" onClick={() => handleDelete(a)} disabled={saving}>
+                      删除
+                    </button>
                   </td>
                 </tr>
               ))}

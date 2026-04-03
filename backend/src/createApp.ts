@@ -142,6 +142,33 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
     res.json(rows[0] ?? null)
   })
 
+  app.delete('/api/accounts/:id', requireAuth, async (req, res) => {
+    const { id } = req.params
+
+    try {
+      const { rows } = await pool.query<{
+        account_id: string
+      }>(
+        `delete from fish_accounts
+         where account_id = $1
+         returning account_id`,
+        [id]
+      )
+
+      if (!rows[0]) {
+        return res.status(404).json({ error: 'account not found' })
+      }
+
+      return res.json({ ok: true, deletedAccountId: rows[0].account_id })
+    } catch (error) {
+      if ((error as { code?: string }).code === '23503') {
+        return res.status(409).json({ error: 'account is referenced by orders' })
+      }
+
+      throw error
+    }
+  })
+
   app.get('/api/skus', requireAuth, async (_req, res) => {
     const { rows } = await pool.query(
       `select sku_id,sku_code,name,spec,unit_price,category,status,created_at,inventory_id,inventory_quantity
@@ -291,6 +318,23 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
     return res.json(rows)
   })
 
+  app.get('/api/orders/:id', requireAuth, async (req, res) => {
+    const { id } = req.params
+    const { rows } = await pool.query(
+      `select *
+       from orders
+       where order_id = $1
+       limit 1`,
+      [id]
+    )
+
+    if (!rows[0]) {
+      return res.status(404).json({ error: 'order not found' })
+    }
+
+    return res.json(rows[0])
+  })
+
   app.post('/api/orders', requireAuth, async (req, res) => {
     const b = req.body
     const { rows } = await pool.query(
@@ -346,6 +390,59 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
     res.json(rows[0] ?? null)
   })
 
+  app.put('/api/orders/:id', requireAuth, async (req, res) => {
+    const { id } = req.params
+    const b = req.body
+    const { rows } = await pool.query(
+      `update orders
+       set account_id=$1,
+           order_type=$2,
+           buyer_name=$3,
+           shipping_address=$4,
+           items=$5::jsonb,
+           total_amount=$6,
+           ship_status=$7,
+           tracking_number=$8,
+           tracking_method=$9,
+           is_abnormal=$10,
+           abnormal_type=$11,
+           remark=$12,
+           settlement_status=$13,
+           paid_amount=$14,
+           paid_at=$15,
+           paid_remark=$16,
+           shipped_at=$17
+       where order_id=$18
+       returning *`,
+      [
+        b.account_id,
+        b.order_type,
+        b.buyer_name,
+        b.shipping_address,
+        JSON.stringify(b.items ?? []),
+        b.total_amount ?? 0,
+        b.ship_status ?? 'pending',
+        b.tracking_number ?? null,
+        b.tracking_method ?? null,
+        b.is_abnormal ?? false,
+        b.abnormal_type ?? null,
+        b.remark ?? null,
+        b.settlement_status ?? null,
+        b.paid_amount ?? 0,
+        b.paid_at ?? null,
+        b.paid_remark ?? null,
+        b.shipped_at ?? null,
+        id,
+      ]
+    )
+
+    if (!rows[0]) {
+      return res.status(404).json({ error: 'order not found' })
+    }
+
+    return res.json(rows[0])
+  })
+
   app.patch('/api/orders/:id/paid', requireAuth, async (req, res) => {
     const { id } = req.params
     const b = req.body
@@ -363,6 +460,22 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
       ]
     )
     res.json(rows[0] ?? null)
+  })
+
+  app.delete('/api/orders/:id', requireAuth, async (req, res) => {
+    const { id } = req.params
+    const { rows } = await pool.query<{ order_id: string }>(
+      `delete from orders
+       where order_id = $1
+       returning order_id`,
+      [id]
+    )
+
+    if (!rows[0]) {
+      return res.status(404).json({ error: 'order not found' })
+    }
+
+    return res.json({ ok: true, deletedOrderId: rows[0].order_id })
   })
 
   app.post('/api/orders/bulkUpsert', requireAuth, async (req, res) => {

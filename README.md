@@ -172,6 +172,12 @@ npm run test:smoke
 - `/api/meta`
 - `/api/auth/login`
 - `/api/auth/me`
+- `POST /api/accounts`
+- `DELETE /api/accounts/:id`（含订单引用冲突校验）
+- `POST /api/orders`
+- `GET /api/orders/:id`
+- `PUT /api/orders/:id`
+- `DELETE /api/orders/:id`
 - `POST /api/skus`
 - `POST /api/skus/:id/images`
 - `PATCH /api/skus/:id/images/reorder`
@@ -228,6 +234,7 @@ npm run dev
 | `GET /api/health` | 服务与数据库健康状态 |
 | `POST /api/auth/login` | 登录 |
 | `GET /api/accounts` | 账号列表 |
+| `DELETE /api/accounts/:id` | 删除账号；若已被订单引用则返回冲突 |
 | `GET /api/skus` | 商品列表 |
 | `GET /api/skus/:id` | 商品详情与图片列表 |
 | `DELETE /api/skus/:id` | 删除 SKU，并清理关联图片文件 |
@@ -239,7 +246,18 @@ npm run dev
 | `DELETE /api/skus/:id/images/:imageId` | 删除商品图片到回收站 |
 | `POST /api/internal/jobs/cleanup-product-images` | 清理过期图片回收站文件 |
 | `GET /api/orders` | 订单列表 |
+| `GET /api/orders/:id` | 订单详情 |
+| `POST /api/orders` | 新建订单 |
+| `PUT /api/orders/:id` | 完整更新订单基础信息/商品明细/发货信息 |
+| `DELETE /api/orders/:id` | 删除订单 |
 | `POST /api/orders/bulkUpsert` | 订单批量导入/更新 |
+
+## 当前页面 CRUD 结论
+
+- 账号管理：支持新增、列表查询、编辑、停用、删除；若账号已被订单引用会阻止删除
+- 产品库：支持新增、列表查询、编辑、停用、删除，商品图片走 NAS 私有文件仓
+- 订单管理：支持新增、列表查询、按订单号读取详情、完整编辑、删除、CSV 批量导入与 Excel 导出
+- 结算管理：定位为订单结算子视图，负责批发订单收款更新与欠款汇总，不单独承担订单新增/删除
 
 ## 相关运维文件
 

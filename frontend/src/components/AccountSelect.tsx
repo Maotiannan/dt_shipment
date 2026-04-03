@@ -27,7 +27,11 @@ export default function AccountSelect({
       try {
         const data = await apiRequest<BizAccount[]>('/api/accounts')
         if (!alive) return
-        setAccounts((data ?? []).filter((a) => (a.status ?? 'active') === 'active'))
+        setAccounts(
+          (data ?? []).filter(
+            (a) => (a.status ?? 'active') === 'active' || a.account_id === value
+          )
+        )
       } finally {
         if (alive) setLoading(false)
       }
@@ -36,7 +40,7 @@ export default function AccountSelect({
     return () => {
       alive = false
     }
-  }, [])
+  }, [value])
 
   const options = useMemo(() => accounts, [accounts])
 
@@ -65,4 +69,3 @@ export default function AccountSelect({
     </select>
   )
 }
-

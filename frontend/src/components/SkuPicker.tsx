@@ -16,6 +16,7 @@ export default function SkuPicker({
   onChange,
   disabled,
   placeholder = '搜索 SKU（编码/名称）',
+  fallbackLabel,
 }: {
   skuId: string | null
   onChange: (next: {
@@ -26,6 +27,7 @@ export default function SkuPicker({
   }) => void
   disabled?: boolean
   placeholder?: string
+  fallbackLabel?: string
 }) {
   const [loading, setLoading] = useState(true)
   const [skus, setSkus] = useState<Sku[]>([])
@@ -38,7 +40,9 @@ export default function SkuPicker({
       try {
         const data = await apiRequest<Sku[]>('/api/skus')
         if (!alive) return
-        setSkus((data ?? []).filter((s) => (s.status ?? 'active') === 'active'))
+        setSkus(
+          (data ?? []).filter((s) => (s.status ?? 'active') === 'active' || s.sku_id === skuId)
+        )
       } finally {
         if (alive) setLoading(false)
       }
@@ -46,7 +50,7 @@ export default function SkuPicker({
     return () => {
       alive = false
     }
-  }, [])
+  }, [skuId])
 
   const selectedSku = useMemo(() => {
     if (!skuId) return null
@@ -59,10 +63,12 @@ export default function SkuPicker({
         ? `${selectedSku.sku_code} ${selectedSku.name}`
         : selectedSku.name
       setQuery(display)
+    } else if (fallbackLabel?.trim()) {
+      setQuery(fallbackLabel)
     } else if (!skuId) {
       setQuery('')
     }
-  }, [selectedSku, skuId])
+  }, [fallbackLabel, selectedSku, skuId])
 
   const suggestions = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -157,4 +163,3 @@ export default function SkuPicker({
     </div>
   )
 }
-
