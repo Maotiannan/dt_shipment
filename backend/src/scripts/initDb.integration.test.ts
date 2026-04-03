@@ -95,6 +95,7 @@ function isSchemaMutationQuery(sql: string) {
   const normalized = normalizeSql(sql)
   return (
     normalized.startsWith('alter table') ||
+    normalized.startsWith('update skus') ||
     normalized.startsWith('update product_images') ||
     normalized.startsWith('insert into skus') ||
     normalized.startsWith('drop index') ||
@@ -252,6 +253,28 @@ async function seedPartialProductImagesTable(pool: Pool) {
       sku_id uuid,
       storage_key text
     );
+  `)
+}
+
+async function seedLegacySkuBackfillState(pool: Pool) {
+  await pool.query(`
+    create table if not exists skus (
+      sku_id uuid primary key,
+      sku_code text,
+      name text not null,
+      spec text,
+      unit_price numeric(12,2) not null default 0,
+      category text,
+      status text not null default 'active',
+      inventory_id text,
+      inventory_quantity integer,
+      created_at timestamptz not null default now()
+    );
+  `)
+
+  await pool.query(`
+    insert into skus (sku_id, sku_code, name, spec, category)
+    values ('99999999-9999-9999-9999-999999999999', 'legacy-001', 'legacy sku', 'xl', 'hardware');
   `)
 }
 
@@ -536,6 +559,34 @@ async function readProductImageIndexDefinitions(pool: Pool) {
   return Object.fromEntries(indexes.rows.map((row) => [row.indexname, row.indexdef]))
 }
 
+async function readLegacySkuRows(pool: Pool) {
+  const rows = await pool.query<{
+    sku_id: string
+    category: string | null
+    spec: string | null
+  }>(`
+    select sku_id, category, spec
+    from skus
+    order by sku_id
+  `)
+
+  return rows.rows
+}
+
+async function readBackfilledSkuRows(pool: Pool) {
+  const rows = await pool.query<{
+    sku_id: string
+    category_name: string | null
+    variant_name: string | null
+  }>(`
+    select sku_id, category_name, variant_name
+    from skus
+    order by sku_id
+  `)
+
+  return rows.rows
+}
+
 async function readCommerceFoundationSchema(pool: Pool) {
   const [skusColumns, ordersColumns, tables] = await Promise.all([
     pool.query<{ column_name: string }>(`
@@ -609,6 +660,46 @@ dbTest('db:init leaves product_images convergence no-op on clean steady-state bo
     assert.equal(columns.has('delivery_channel'), true)
     assert.equal(tables.has('inventory_movements'), true)
     assert.equal(tables.has('sku_attribute_suggestions'), true)
+  })
+
+  await withDisposablePostgres(async (pool) => {
+    await seedLegacySkuBackfillState(pool)
+    const recordingPool = createRecordingPool(pool)
+
+    const beforeRows = await readLegacySkuRows(pool)
+    assert.deepEqual(beforeRows, [
+      {
+        sku_id: '99999999-9999-9999-9999-999999999999',
+        category: 'hardware',
+        spec: 'xl',
+      },
+    ])
+
+    await runInitDb(recordingPool, schemaSql)
+
+    const afterRows = await readBackfilledSkuRows(pool)
+    assert.deepEqual(afterRows, [
+      {
+        sku_id: '99999999-9999-9999-9999-999999999999',
+        category_name: 'hardware',
+        variant_name: 'xl',
+      },
+    ])
+    assert.equal(
+      recordingPool.queries.some((sql) => sql.startsWith('update skus set category_name = coalesce')),
+      true
+    )
+
+    recordingPool.queries.length = 0
+    await runInitDb(recordingPool, schemaSql)
+
+    const secondRunRows = await readBackfilledSkuRows(pool)
+    assert.deepEqual(secondRunRows, afterRows)
+    assert.equal(
+      recordingPool.queries.some((sql) => sql.startsWith('update skus set category_name = coalesce')),
+      false
+    )
+    assert.equal(countSchemaMutationQueries(recordingPool.queries), 0)
   })
 
   await withDisposablePostgres(async (pool) => {

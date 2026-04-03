@@ -12,6 +12,7 @@ type Scenario = {
   tableCount: number
   schemaTables?: string[]
   schemaColumnsByTable?: Record<string, string[]>
+  skuRows?: Array<Record<string, string | null>>
 }
 
 function makePool(scenario: Scenario) {
@@ -27,6 +28,7 @@ function makePool(scenario: Scenario) {
     hasCanonicalDrift: scenario.hasCanonicalDrift,
     hasPgcryptoExtension: scenario.hasPgcryptoExtension,
     tableCount: scenario.tableCount,
+    skuRows: scenario.skuRows ?? [],
     schemaTables: scenario.schemaTables ?? [
       'fish_accounts',
       'skus',
@@ -205,7 +207,29 @@ function makePool(scenario: Scenario) {
         normalized.includes('category_name = coalesce(category_name, category)') &&
         normalized.includes('variant_name = coalesce(variant_name, spec)')
       ) {
+        state.skuRows = state.skuRows.map((row) => ({
+          ...row,
+          category_name: row.category_name ?? row.category ?? null,
+          variant_name: row.variant_name ?? row.spec ?? null,
+        }))
         return { rows: [] }
+      }
+
+      if (
+        normalized.includes('from skus') &&
+        normalized.includes('category_name is null') &&
+        normalized.includes('variant_name is null') &&
+        normalized.includes('needs_backfill')
+      ) {
+        return {
+          rows: [
+            {
+              needs_backfill: state.skuRows.some(
+                (row) => row.category_name == null || row.variant_name == null
+              ),
+            },
+          ],
+        }
       }
 
       if (
@@ -247,6 +271,32 @@ function makePool(scenario: Scenario) {
             { column_name: 'updated_at', is_nullable: 'NO', column_default: 'now()' },
             { column_name: 'deleted_at', is_nullable: 'YES', column_default: null },
           ],
+        }
+      }
+
+      if (
+        normalized ===
+        'select sku_id, category, spec from skus order by sku_id'
+      ) {
+        return {
+          rows: state.skuRows.map((row) => ({
+            sku_id: row.sku_id,
+            category: row.category,
+            spec: row.spec,
+          })),
+        }
+      }
+
+      if (
+        normalized ===
+        'select sku_id, category_name, variant_name from skus order by sku_id'
+      ) {
+        return {
+          rows: state.skuRows.map((row) => ({
+            sku_id: row.sku_id,
+            category_name: row.category_name,
+            variant_name: row.variant_name,
+          })),
         }
       }
 
@@ -350,6 +400,10 @@ function makePool(scenario: Scenario) {
       }
 
       if (normalized.startsWith('insert into skus (sku_id, name, status)')) {
+        return { rows: [] }
+      }
+
+      if (normalized.startsWith('insert into skus')) {
         return { rows: [] }
       }
 
@@ -482,6 +536,34 @@ async function readCommerceFoundationSchema(pool: ReturnType<typeof makePool>) {
   }
 }
 
+async function readLegacySkuRows(pool: ReturnType<typeof makePool>) {
+  const rows = await pool.query<{
+    sku_id: string
+    category: string | null
+    spec: string | null
+  }>(`
+    select sku_id, category, spec
+    from skus
+    order by sku_id
+  `)
+
+  return rows.rows
+}
+
+async function readBackfilledSkuRows(pool: ReturnType<typeof makePool>) {
+  const rows = await pool.query<{
+    sku_id: string
+    category_name: string | null
+    variant_name: string | null
+  }>(`
+    select sku_id, category_name, variant_name
+    from skus
+    order by sku_id
+  `)
+
+  return rows.rows
+}
+
 test('runInitDb repairs missing commerce foundation schema and stays stable on second boot', async () => {
   const pool = makePool({
     legacyIndexNames: [],
@@ -575,6 +657,74 @@ test('runInitDb repairs missing commerce foundation schema and stays stable on s
   )
   assert.equal(
     pool.queries.some((sql) => sql.startsWith('create index if not exists product_images_status_idx')),
+    false
+  )
+})
+
+test('runInitDb backfills legacy sku fields once and skips repeat backfill on second boot', async () => {
+  const pool = makePool({
+    legacyIndexNames: [],
+    currentIndexNames: [],
+    currentIndexDefinitions: {},
+    hasRows: false,
+    hasCanonicalDrift: false,
+    hasPgcryptoExtension: false,
+    tableCount: 0,
+    skuRows: [
+      {
+        sku_id: 'sku-legacy-1',
+        category: 'hardware',
+        spec: 'xl',
+        category_name: null,
+        variant_name: null,
+      },
+    ],
+  })
+
+  const beforeColumns = await readCommerceFoundationSchema(pool)
+  assert.equal(beforeColumns.columns.has('category_name'), false)
+  assert.equal(beforeColumns.columns.has('variant_name'), false)
+
+  const beforeRows = await readLegacySkuRows(pool)
+  assert.deepEqual(beforeRows, [
+    {
+      sku_id: 'sku-legacy-1',
+      category: 'hardware',
+      spec: 'xl',
+    },
+  ])
+
+  await runInitDb(pool, SCHEMA_SQL)
+
+  const afterColumns = await readCommerceFoundationSchema(pool)
+  assert.equal(afterColumns.columns.has('category_name'), true)
+  assert.equal(afterColumns.columns.has('variant_name'), true)
+
+  const afterRows = await readBackfilledSkuRows(pool)
+  assert.deepEqual(afterRows, [
+    {
+      sku_id: 'sku-legacy-1',
+      category_name: 'hardware',
+      variant_name: 'xl',
+    },
+  ])
+  assert.equal(
+    pool.queries.some((sql) =>
+      sql.startsWith('update skus set category_name = coalesce(category_name, category)')
+    ),
+    true
+  )
+
+  pool.queries.length = 0
+
+  await runInitDb(pool, SCHEMA_SQL)
+
+  const secondRunRows = await readBackfilledSkuRows(pool)
+  assert.deepEqual(secondRunRows, afterRows)
+  assert.equal(
+    pool.queries.some((sql) =>
+      sql.startsWith('update skus set category_name = coalesce(category_name, category)')
+    ),
     false
   )
 })

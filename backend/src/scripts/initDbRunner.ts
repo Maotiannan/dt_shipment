@@ -114,6 +114,15 @@ set category_name = coalesce(category_name, category),
 where category_name is null or variant_name is null;
 `
 
+const COMMERCE_FOUNDATION_SKU_BACKFILL_NEED_SQL = `
+  select exists (
+    select 1
+    from skus
+    where category_name is null
+       or variant_name is null
+  ) as needs_backfill
+`
+
 const PRODUCT_IMAGE_PRIMARY_KEY_SQL = `
   select exists (
     select 1
@@ -555,6 +564,11 @@ async function detectCommerceFoundationSchemaRepairNeed(pool: InitDbPool) {
     hasCategorySourceColumn,
     hasSpecSourceColumn,
   } satisfies CommerceFoundationSchemaState
+}
+
+async function needsCommerceFoundationSkuBackfill(pool: InitDbPool) {
+  const result = await pool.query(COMMERCE_FOUNDATION_SKU_BACKFILL_NEED_SQL)
+  return getBooleanValue(result.rows[0], 'needs_backfill')
 }
 
 function needsCommerceFoundationSchemaRepair(preflight: CommerceFoundationSchemaState) {
@@ -1159,7 +1173,9 @@ export async function runInitDb(pool: InitDbPool, schemaSql: string) {
       commerceFoundationSchemaRepairNeed.hasCategorySourceColumn &&
       commerceFoundationSchemaRepairNeed.hasSpecSourceColumn
     ) {
-      await client.query(COMMERCE_FOUNDATION_SKU_BACKFILL_SQL)
+      if (await needsCommerceFoundationSkuBackfill(client)) {
+        await client.query(COMMERCE_FOUNDATION_SKU_BACKFILL_SQL)
+      }
     }
 
     await dropNonCanonicalProductImageIndexes(client)
