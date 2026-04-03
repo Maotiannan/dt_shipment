@@ -118,8 +118,8 @@ const COMMERCE_FOUNDATION_SKU_BACKFILL_NEED_SQL = `
   select exists (
     select 1
     from skus
-    where category_name is null
-       or variant_name is null
+    where (category is not null and category_name is null)
+       or (spec is not null and variant_name is null)
   ) as needs_backfill
 `
 

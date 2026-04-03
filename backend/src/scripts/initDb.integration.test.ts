@@ -278,6 +278,28 @@ async function seedLegacySkuBackfillState(pool: Pool) {
   `)
 }
 
+async function seedLegacySkuEmptyBackfillState(pool: Pool) {
+  await pool.query(`
+    create table if not exists skus (
+      sku_id uuid primary key,
+      sku_code text,
+      name text not null,
+      spec text,
+      unit_price numeric(12,2) not null default 0,
+      category text,
+      status text not null default 'active',
+      inventory_id text,
+      inventory_quantity integer,
+      created_at timestamptz not null default now()
+    );
+  `)
+
+  await pool.query(`
+    insert into skus (sku_id, sku_code, name, spec, category)
+    values ('88888888-8888-8888-8888-888888888888', 'legacy-empty', 'legacy empty sku', null, null);
+  `)
+}
+
 async function seedPartialProductImagesDuplicateStorageKeyState(pool: Pool) {
   await seedPartialProductImagesTable(pool)
 
@@ -688,6 +710,46 @@ dbTest('db:init leaves product_images convergence no-op on clean steady-state bo
     assert.equal(
       recordingPool.queries.some((sql) => sql.startsWith('update skus set category_name = coalesce')),
       true
+    )
+
+    recordingPool.queries.length = 0
+    await runInitDb(recordingPool, schemaSql)
+
+    const secondRunRows = await readBackfilledSkuRows(pool)
+    assert.deepEqual(secondRunRows, afterRows)
+    assert.equal(
+      recordingPool.queries.some((sql) => sql.startsWith('update skus set category_name = coalesce')),
+      false
+    )
+    assert.equal(countSchemaMutationQueries(recordingPool.queries), 0)
+  })
+
+  await withDisposablePostgres(async (pool) => {
+    await seedLegacySkuEmptyBackfillState(pool)
+    const recordingPool = createRecordingPool(pool)
+
+    const beforeRows = await readLegacySkuRows(pool)
+    assert.deepEqual(beforeRows, [
+      {
+        sku_id: '88888888-8888-8888-8888-888888888888',
+        category: null,
+        spec: null,
+      },
+    ])
+
+    await runInitDb(recordingPool, schemaSql)
+
+    const afterRows = await readBackfilledSkuRows(pool)
+    assert.deepEqual(afterRows, [
+      {
+        sku_id: '88888888-8888-8888-8888-888888888888',
+        category_name: null,
+        variant_name: null,
+      },
+    ])
+    assert.equal(
+      recordingPool.queries.some((sql) => sql.startsWith('update skus set category_name = coalesce')),
+      false
     )
 
     recordingPool.queries.length = 0

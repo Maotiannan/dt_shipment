@@ -217,15 +217,17 @@ function makePool(scenario: Scenario) {
 
       if (
         normalized.includes('from skus') &&
-        normalized.includes('category_name is null') &&
-        normalized.includes('variant_name is null') &&
+        normalized.includes('category is not null and category_name is null') &&
+        normalized.includes('spec is not null and variant_name is null') &&
         normalized.includes('needs_backfill')
       ) {
         return {
           rows: [
             {
               needs_backfill: state.skuRows.some(
-                (row) => row.category_name == null || row.variant_name == null
+                (row) =>
+                  (row.category != null && row.category_name == null) ||
+                  (row.spec != null && row.variant_name == null)
               ),
             },
           ],
@@ -721,6 +723,61 @@ test('runInitDb backfills legacy sku fields once and skips repeat backfill on se
 
   const secondRunRows = await readBackfilledSkuRows(pool)
   assert.deepEqual(secondRunRows, afterRows)
+  assert.equal(
+    pool.queries.some((sql) =>
+      sql.startsWith('update skus set category_name = coalesce(category_name, category)')
+    ),
+    false
+  )
+})
+
+test('runInitDb leaves empty legacy sku fields empty and does not backfill them again', async () => {
+  const pool = makePool({
+    legacyIndexNames: [],
+    currentIndexNames: [],
+    currentIndexDefinitions: {},
+    hasRows: false,
+    hasCanonicalDrift: false,
+    hasPgcryptoExtension: false,
+    tableCount: 0,
+    skuRows: [
+      {
+        sku_id: 'sku-empty-1',
+        category: null,
+        spec: null,
+        category_name: null,
+        variant_name: null,
+      },
+    ],
+  })
+
+  await runInitDb(pool, SCHEMA_SQL)
+
+  assert.deepEqual(await readBackfilledSkuRows(pool), [
+    {
+      sku_id: 'sku-empty-1',
+      category_name: null,
+      variant_name: null,
+    },
+  ])
+  assert.equal(
+    pool.queries.some((sql) =>
+      sql.startsWith('update skus set category_name = coalesce(category_name, category)')
+    ),
+    false
+  )
+
+  pool.queries.length = 0
+
+  await runInitDb(pool, SCHEMA_SQL)
+
+  assert.deepEqual(await readBackfilledSkuRows(pool), [
+    {
+      sku_id: 'sku-empty-1',
+      category_name: null,
+      variant_name: null,
+    },
+  ])
   assert.equal(
     pool.queries.some((sql) =>
       sql.startsWith('update skus set category_name = coalesce(category_name, category)')
