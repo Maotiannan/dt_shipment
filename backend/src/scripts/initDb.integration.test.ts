@@ -536,6 +536,45 @@ async function readProductImageIndexDefinitions(pool: Pool) {
   return Object.fromEntries(indexes.rows.map((row) => [row.indexname, row.indexdef]))
 }
 
+async function readCommerceFoundationSchema(pool: Pool) {
+  const [skusColumns, ordersColumns, tables] = await Promise.all([
+    pool.query<{ column_name: string }>(`
+      select column_name
+      from information_schema.columns
+      where table_schema = current_schema()
+        and table_name = 'skus'
+    `),
+    pool.query<{ column_name: string }>(`
+      select column_name
+      from information_schema.columns
+      where table_schema = current_schema()
+        and table_name = 'orders'
+    `),
+    pool.query<{ table_name: string }>(`
+      select table_name
+      from information_schema.tables
+      where table_schema = current_schema()
+        and table_name in (
+          'fish_accounts',
+          'skus',
+          'orders',
+          'push_subscriptions',
+          'product_images',
+          'inventory_movements',
+          'sku_attribute_suggestions'
+        )
+    `),
+  ])
+
+  return {
+    columns: new Set([
+      ...skusColumns.rows.map((row) => row.column_name),
+      ...ordersColumns.rows.map((row) => row.column_name),
+    ]),
+    tables: new Set(tables.rows.map((row) => row.table_name)),
+  }
+}
+
 function normalizeIndexDefinition(indexDef: string) {
   return indexDef.replace(/\s+/g, ' ').trim().toLowerCase()
 }
@@ -562,6 +601,14 @@ dbTest('db:init leaves product_images convergence no-op on clean steady-state bo
       'product_images_status_idx',
       'product_images_storage_key_key',
     ])
+
+    const { columns, tables } = await readCommerceFoundationSchema(pool)
+    assert.equal(columns.has('category_name'), true)
+    assert.equal(columns.has('color_name'), true)
+    assert.equal(columns.has('variant_name'), true)
+    assert.equal(columns.has('delivery_channel'), true)
+    assert.equal(tables.has('inventory_movements'), true)
+    assert.equal(tables.has('sku_attribute_suggestions'), true)
   })
 
   await withDisposablePostgres(async (pool) => {

@@ -57,6 +57,63 @@ const PRODUCT_IMAGE_SCHEMA_COLUMNS_SQL = `
     and table_name = 'product_images'
 `
 
+const COMMERCE_FOUNDATION_SKU_COLUMNS_SQL = `
+  select column_name
+  from information_schema.columns
+  where table_schema = current_schema()
+    and table_name = 'skus'
+`
+
+const COMMERCE_FOUNDATION_ORDER_COLUMNS_SQL = `
+  select column_name
+  from information_schema.columns
+  where table_schema = current_schema()
+    and table_name = 'orders'
+`
+
+const COMMERCE_FOUNDATION_TABLES_SQL = `
+  select table_name
+  from information_schema.tables
+  where table_schema = current_schema()
+    and table_name in ('inventory_movements', 'sku_attribute_suggestions')
+`
+
+const COMMERCE_FOUNDATION_SCHEMA_STRUCTURE_REPAIR_SQL = `
+alter table if exists skus add column if not exists category_name text;
+alter table if exists skus add column if not exists color_name text;
+alter table if exists skus add column if not exists variant_name text;
+alter table if exists orders add column if not exists delivery_channel text;
+
+create table if not exists inventory_movements (
+  movement_id uuid primary key default gen_random_uuid(),
+  sku_id uuid not null,
+  order_id text,
+  delta_quantity integer not null,
+  reason text not null,
+  remark text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists sku_attribute_suggestions (
+  suggestion_id uuid primary key default gen_random_uuid(),
+  attribute_type text not null,
+  scope_key text,
+  value text not null,
+  usage_count integer not null default 1,
+  source text not null,
+  is_enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+`
+
+const COMMERCE_FOUNDATION_SKU_BACKFILL_SQL = `
+update skus
+set category_name = coalesce(category_name, category),
+    variant_name = coalesce(variant_name, spec)
+where category_name is null or variant_name is null;
+`
+
 const PRODUCT_IMAGE_PRIMARY_KEY_SQL = `
   select exists (
     select 1
@@ -454,6 +511,58 @@ function columnDefaultMatches(
 async function getProductImageColumns(pool: InitDbPool) {
   const result = await pool.query(PRODUCT_IMAGE_SCHEMA_COLUMNS_SQL)
   return result.rows.map((row) => row as ProductImageColumnMetadata)
+}
+
+type CommerceFoundationSchemaState = {
+  missingSkuColumns: Set<string>
+  missingOrderColumns: Set<string>
+  missingTables: Set<string>
+  hasCategorySourceColumn: boolean
+  hasSpecSourceColumn: boolean
+}
+
+async function getColumnNames(pool: InitDbPool, sql: string) {
+  const result = await pool.query(sql)
+  return new Set(result.rows.map((row) => String(row.column_name)))
+}
+
+async function getTableNames(pool: InitDbPool, sql: string) {
+  const result = await pool.query(sql)
+  return new Set(result.rows.map((row) => String(row.table_name)))
+}
+
+async function detectCommerceFoundationSchemaRepairNeed(pool: InitDbPool) {
+  const skuColumns = await getColumnNames(pool, COMMERCE_FOUNDATION_SKU_COLUMNS_SQL)
+  const orderColumns = await getColumnNames(pool, COMMERCE_FOUNDATION_ORDER_COLUMNS_SQL)
+  const tableNames = await getTableNames(pool, COMMERCE_FOUNDATION_TABLES_SQL)
+  const hasCategorySourceColumn = skuColumns.has('category')
+  const hasSpecSourceColumn = skuColumns.has('spec')
+
+  const missingSkuColumns = new Set(
+    ['category_name', 'color_name', 'variant_name'].filter((columnName) => !skuColumns.has(columnName))
+  )
+  const missingOrderColumns = new Set(
+    ['delivery_channel'].filter((columnName) => !orderColumns.has(columnName))
+  )
+  const missingTables = new Set(
+    ['inventory_movements', 'sku_attribute_suggestions'].filter((tableName) => !tableNames.has(tableName))
+  )
+
+  return {
+    missingSkuColumns,
+    missingOrderColumns,
+    missingTables,
+    hasCategorySourceColumn,
+    hasSpecSourceColumn,
+  } satisfies CommerceFoundationSchemaState
+}
+
+function needsCommerceFoundationSchemaRepair(preflight: CommerceFoundationSchemaState) {
+  return (
+    preflight.missingSkuColumns.size > 0 ||
+    preflight.missingOrderColumns.size > 0 ||
+    preflight.missingTables.size > 0
+  )
 }
 
 async function hasProductImagePrimaryKey(pool: InitDbPool) {
@@ -1039,6 +1148,19 @@ export async function runInitDb(pool: InitDbPool, schemaSql: string) {
     // make definition-aware without masking future schema additions.
     await client.query('create extension if not exists pgcrypto;')
     await client.query(schemaSql)
+
+    const commerceFoundationSchemaRepairNeed = await detectCommerceFoundationSchemaRepairNeed(client)
+
+    if (needsCommerceFoundationSchemaRepair(commerceFoundationSchemaRepairNeed)) {
+      await client.query(COMMERCE_FOUNDATION_SCHEMA_STRUCTURE_REPAIR_SQL)
+    }
+
+    if (
+      commerceFoundationSchemaRepairNeed.hasCategorySourceColumn &&
+      commerceFoundationSchemaRepairNeed.hasSpecSourceColumn
+    ) {
+      await client.query(COMMERCE_FOUNDATION_SKU_BACKFILL_SQL)
+    }
 
     await dropNonCanonicalProductImageIndexes(client)
 

@@ -14,6 +14,9 @@ create table if not exists skus (
   spec text,
   unit_price numeric(12,2) not null default 0,
   category text,
+  category_name text,
+  color_name text,
+  variant_name text,
   status text not null default 'active',
   inventory_id text,
   inventory_quantity integer,
@@ -29,6 +32,7 @@ create table if not exists orders (
   items jsonb not null default '[]'::jsonb,
   total_amount numeric(12,2) not null default 0,
   ship_status text not null default 'pending',
+  delivery_channel text,
   tracking_number text,
   tracking_method text,
   is_abnormal boolean not null default false,
@@ -40,6 +44,28 @@ create table if not exists orders (
   paid_remark text,
   created_at timestamptz not null default now(),
   shipped_at timestamptz
+);
+
+create table if not exists inventory_movements (
+  movement_id uuid primary key default gen_random_uuid(),
+  sku_id uuid not null,
+  order_id text,
+  delta_quantity integer not null,
+  reason text not null,
+  remark text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists sku_attribute_suggestions (
+  suggestion_id uuid primary key default gen_random_uuid(),
+  attribute_type text not null,
+  scope_key text,
+  value text not null,
+  usage_count integer not null default 1,
+  source text not null,
+  is_enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists push_subscriptions (
