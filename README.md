@@ -4,6 +4,7 @@
 
 ## 当前部署结论
 
+- 当前补丁版本: `1.1.1`
 - 前端容器: `dt-shipment-frontend`
 - 后端容器: `dt-shipment-backend`
 - 数据库容器: `dt-shipment-db`

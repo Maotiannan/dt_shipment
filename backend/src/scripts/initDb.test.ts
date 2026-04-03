@@ -529,41 +529,45 @@ async function readCommerceFoundationSchema(pool: ReturnType<typeof makePool>) {
     `),
   ])
 
+  const skuColumnRows = skusColumns.rows as Array<{ column_name: string }>
+  const orderColumnRows = ordersColumns.rows as Array<{ column_name: string }>
+  const tableRows = tables.rows as Array<{ table_name: string }>
+
   return {
     columns: new Set([
-      ...skusColumns.rows.map((row) => String(row.column_name)),
-      ...ordersColumns.rows.map((row) => String(row.column_name)),
+      ...skuColumnRows.map((row) => String(row.column_name)),
+      ...orderColumnRows.map((row) => String(row.column_name)),
     ]),
-    tables: new Set(tables.rows.map((row) => String(row.table_name))),
+    tables: new Set(tableRows.map((row) => String(row.table_name))),
   }
 }
 
 async function readLegacySkuRows(pool: ReturnType<typeof makePool>) {
-  const rows = await pool.query<{
-    sku_id: string
-    category: string | null
-    spec: string | null
-  }>(`
+  const rows = await pool.query(`
     select sku_id, category, spec
     from skus
     order by sku_id
   `)
 
-  return rows.rows
+  return rows.rows as Array<{
+    sku_id: string
+    category: string | null
+    spec: string | null
+  }>
 }
 
 async function readBackfilledSkuRows(pool: ReturnType<typeof makePool>) {
-  const rows = await pool.query<{
-    sku_id: string
-    category_name: string | null
-    variant_name: string | null
-  }>(`
+  const rows = await pool.query(`
     select sku_id, category_name, variant_name
     from skus
     order by sku_id
   `)
 
-  return rows.rows
+  return rows.rows as Array<{
+    sku_id: string
+    category_name: string | null
+    variant_name: string | null
+  }>
 }
 
 test('runInitDb repairs missing commerce foundation schema and stays stable on second boot', async () => {
