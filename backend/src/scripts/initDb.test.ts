@@ -31,8 +31,6 @@ function makePool(scenario: Scenario) {
       'fish_accounts',
       'skus',
       'orders',
-      'inventory_movements',
-      'sku_attribute_suggestions',
       'push_subscriptions',
       'product_images',
     ],
@@ -44,9 +42,6 @@ function makePool(scenario: Scenario) {
         'spec',
         'unit_price',
         'category',
-        'category_name',
-        'color_name',
-        'variant_name',
         'status',
         'inventory_id',
         'inventory_quantity',
@@ -63,7 +58,6 @@ function makePool(scenario: Scenario) {
         'ship_status',
         'tracking_number',
         'tracking_method',
-        'delivery_channel',
         'is_abnormal',
         'abnormal_type',
         'remark',
@@ -134,79 +128,75 @@ function makePool(scenario: Scenario) {
       }
 
       if (normalized === 'schema-sql') {
-        state.tableCount = 7
-        state.schemaTables = [
-          'fish_accounts',
-          'skus',
-          'orders',
-          'inventory_movements',
-          'sku_attribute_suggestions',
-          'push_subscriptions',
-          'product_images',
-        ]
-        state.schemaColumnsByTable = {
-          skus: [
-            'sku_id',
-            'sku_code',
-            'name',
-            'spec',
-            'unit_price',
-            'category',
-            'category_name',
-            'color_name',
-            'variant_name',
-            'status',
-            'inventory_id',
-            'inventory_quantity',
-            'created_at',
-          ],
-          orders: [
-            'order_id',
-            'account_id',
-            'order_type',
-            'buyer_name',
-            'shipping_address',
-            'items',
-            'total_amount',
-            'ship_status',
-            'delivery_channel',
-            'tracking_number',
-            'tracking_method',
-            'is_abnormal',
-            'abnormal_type',
-            'remark',
-            'settlement_status',
-            'paid_amount',
-            'paid_at',
-            'paid_remark',
-            'created_at',
-            'shipped_at',
-          ],
+        return { rows: [] }
+      }
+
+      if (
+        normalized.includes('alter table if exists skus add column if not exists category_name text') &&
+        normalized.includes('alter table if exists skus add column if not exists color_name text') &&
+        normalized.includes('alter table if exists skus add column if not exists variant_name text') &&
+        normalized.includes('alter table if exists orders add column if not exists delivery_channel text') &&
+        normalized.includes('create table if not exists inventory_movements') &&
+        normalized.includes('create table if not exists sku_attribute_suggestions')
+      ) {
+        for (const columnName of ['category_name', 'color_name', 'variant_name']) {
+          if (!state.schemaColumnsByTable.skus.includes(columnName)) {
+            state.schemaColumnsByTable.skus.push(columnName)
+          }
         }
+
+        if (!state.schemaColumnsByTable.orders.includes('delivery_channel')) {
+          state.schemaColumnsByTable.orders.push('delivery_channel')
+        }
+
+        for (const tableName of ['inventory_movements', 'sku_attribute_suggestions']) {
+          if (!state.schemaTables.includes(tableName)) {
+            state.schemaTables.push(tableName)
+          }
+        }
+
         return { rows: [] }
       }
 
       if (normalized.startsWith('alter table if exists skus add column if not exists category_name text')) {
+        if (!state.schemaColumnsByTable.skus.includes('category_name')) {
+          state.schemaColumnsByTable.skus.push('category_name')
+        }
         return { rows: [] }
       }
 
       if (normalized.startsWith('alter table if exists skus add column if not exists color_name text')) {
+        if (!state.schemaColumnsByTable.skus.includes('color_name')) {
+          state.schemaColumnsByTable.skus.push('color_name')
+        }
         return { rows: [] }
       }
 
       if (normalized.startsWith('alter table if exists skus add column if not exists variant_name text')) {
+        if (!state.schemaColumnsByTable.skus.includes('variant_name')) {
+          state.schemaColumnsByTable.skus.push('variant_name')
+        }
         return { rows: [] }
       }
 
       if (normalized.startsWith('alter table if exists orders add column if not exists delivery_channel text')) {
+        if (!state.schemaColumnsByTable.orders.includes('delivery_channel')) {
+          state.schemaColumnsByTable.orders.push('delivery_channel')
+        }
         return { rows: [] }
       }
 
       if (normalized.startsWith('create table if not exists inventory_movements')) {
+        if (!state.schemaTables.includes('inventory_movements')) {
+          state.schemaTables.push('inventory_movements')
+        }
         return { rows: [] }
       }
 
       if (normalized.startsWith('create table if not exists sku_attribute_suggestions')) {
+        if (!state.schemaTables.includes('sku_attribute_suggestions')) {
+          state.schemaTables.push('sku_attribute_suggestions')
+        }
         return { rows: [] }
       }
 
@@ -216,15 +206,6 @@ function makePool(scenario: Scenario) {
         normalized.includes('variant_name = coalesce(variant_name, spec)')
       ) {
         return { rows: [] }
-      }
-
-      if (
-        normalized.includes('from skus') &&
-        normalized.includes('category_name is null') &&
-        normalized.includes('variant_name is null') &&
-        normalized.includes('needs_backfill')
-      ) {
-        return { rows: [{ needs_backfill: false }] }
       }
 
       if (
@@ -501,7 +482,7 @@ async function readCommerceFoundationSchema(pool: ReturnType<typeof makePool>) {
   }
 }
 
-test('runInitDb skips repair on clean steady-state boot', async () => {
+test('runInitDb repairs missing commerce foundation schema and stays stable on second boot', async () => {
   const pool = makePool({
     legacyIndexNames: [],
     currentIndexNames: [],
@@ -512,15 +493,44 @@ test('runInitDb skips repair on clean steady-state boot', async () => {
     tableCount: 0,
   })
 
+  const before = await readCommerceFoundationSchema(pool)
+  assert.equal(before.columns.has('category_name'), false)
+  assert.equal(before.columns.has('color_name'), false)
+  assert.equal(before.columns.has('variant_name'), false)
+  assert.equal(before.columns.has('delivery_channel'), false)
+  assert.equal(before.tables.has('inventory_movements'), false)
+  assert.equal(before.tables.has('sku_attribute_suggestions'), false)
+
   await runInitDb(pool, SCHEMA_SQL)
 
-  const { columns, tables } = await readCommerceFoundationSchema(pool)
-  assert(columns.has('category_name'))
-  assert(columns.has('color_name'))
-  assert(columns.has('variant_name'))
-  assert(columns.has('delivery_channel'))
-  assert(tables.has('inventory_movements'))
-  assert(tables.has('sku_attribute_suggestions'))
+  const after = await readCommerceFoundationSchema(pool)
+  assert(after.columns.has('category_name'))
+  assert(after.columns.has('color_name'))
+  assert(after.columns.has('variant_name'))
+  assert(after.columns.has('delivery_channel'))
+  assert(after.tables.has('inventory_movements'))
+  assert(after.tables.has('sku_attribute_suggestions'))
+
+  assert.equal(
+    pool.queries.some((sql) =>
+      sql.startsWith('alter table if exists skus add column if not exists category_name text')
+    ),
+    true
+  )
+  assert.equal(
+    pool.queries.some((sql) =>
+      sql.includes('alter table if exists orders add column if not exists delivery_channel text')
+    ),
+    true
+  )
+  assert.equal(
+    pool.queries.some((sql) => sql.includes('create table if not exists inventory_movements')),
+    true
+  )
+  assert.equal(
+    pool.queries.some((sql) => sql.includes('create table if not exists sku_attribute_suggestions')),
+    true
+  )
 
   assert.equal(pool.state.repairRan, false)
   assert.equal(pool.state.droppedLegacyIndexes, false)
@@ -536,6 +546,14 @@ test('runInitDb skips repair on clean steady-state boot', async () => {
   await runInitDb(pool, SCHEMA_SQL)
 
   assert.equal(pool.state.repairRan, false)
+  assert.equal(
+    pool.queries.some((sql) => sql.includes('alter table if exists skus add column if not exists category_name text')),
+    false
+  )
+  assert.equal(
+    pool.queries.some((sql) => sql.includes('create table if not exists inventory_movements')),
+    false
+  )
   assert.equal(pool.queries.some((sql) => sql.includes('group by sku_id, sort_order')), false)
   assert.equal(pool.queries.some((sql) => sql.includes('group by sku_id') && sql.includes('is_primary')), false)
   assert.equal(
