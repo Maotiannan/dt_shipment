@@ -258,32 +258,6 @@ export default function ProductImageManager({
       {loading ? <div className="productImageManagerState">图片加载中...</div> : null}
       {errorMsg ? <div className="productImageManagerError">{errorMsg}</div> : null}
 
-      {previewImage ? (
-        <div className="productImagePreviewPanel">
-          <div className="productImagePreviewHeader">
-            <div>
-              <div className="productImagePreviewTitle">图片预览</div>
-              <div className="productImagePreviewSub">
-                {previewImage.is_primary ? '主图' : `排序 ${previewImage.sort_order}`} ·
-                {formatFileSize(previewImage.file_size)}
-              </div>
-            </div>
-            <button
-              type="button"
-              className="ghostBtn ghostBtn-small"
-              onClick={() => setPreviewImageId(null)}
-            >
-              关闭
-            </button>
-          </div>
-          <ProtectedImage
-            srcPath={previewImage.original_url}
-            alt={previewImage.image_id}
-            className="productImagePreviewMedia"
-          />
-        </div>
-      ) : null}
-
       {images.length ? (
         <div className="productImageGrid">
           {images.map((image, index) => {
@@ -360,6 +334,34 @@ export default function ProductImageManager({
       ) : (
         <div className="productImageManagerEmpty">暂无图片，先上传第一张主图。</div>
       )}
+
+      {previewImage ? (
+        <div className="modalOverlay" role="dialog" aria-modal="true">
+          <div className="modal productImagePreviewModal">
+            <div className="productImagePreviewHeader">
+              <div>
+                <div className="productImagePreviewTitle">图片预览</div>
+                <div className="productImagePreviewSub">
+                  {previewImage.is_primary ? '主图' : `排序 ${previewImage.sort_order}`} ·
+                  {formatFileSize(previewImage.file_size)}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="ghostBtn ghostBtn-small"
+                onClick={() => setPreviewImageId(null)}
+              >
+                关闭
+              </button>
+            </div>
+            <ProtectedImage
+              srcPath={previewImage.original_url}
+              alt={previewImage.image_id}
+              className="productImagePreviewMedia"
+            />
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }

@@ -854,3 +854,143 @@ dbTest(
     assert.equal((await listFilesRecursive(tempRoot)).length, 4)
   }
 )
+
+dbTest(
+  'deleting a sku removes product image rows and all related files',
+  { concurrency: false },
+  async (t) => {
+    const running = await getSharedRunningDatabase()
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'dt-shipment-images-root-'))
+    const tempUpload = await mkdtemp(path.join(os.tmpdir(), 'dt-shipment-images-tmp-'))
+    const originalEnv = {
+      PRODUCT_IMAGE_ROOT: process.env.PRODUCT_IMAGE_ROOT,
+      PRODUCT_IMAGE_TMP_DIR: process.env.PRODUCT_IMAGE_TMP_DIR,
+      PRODUCT_IMAGE_ALLOWED_MIME: process.env.PRODUCT_IMAGE_ALLOWED_MIME,
+    }
+
+    let server: ReturnType<typeof createServer> | null = null
+
+    t.after(async () => {
+      server?.close()
+      await rm(tempRoot, { recursive: true, force: true })
+      await rm(tempUpload, { recursive: true, force: true })
+
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) {
+          delete process.env[key]
+        } else {
+          process.env[key] = value
+        }
+      }
+    })
+
+    process.env.PRODUCT_IMAGE_ROOT = tempRoot
+    process.env.PRODUCT_IMAGE_TMP_DIR = tempUpload
+    process.env.PRODUCT_IMAGE_ALLOWED_MIME = 'image/jpeg,image/png,image/webp'
+
+    const createAppModuleUrl = `${pathToFileURL(
+      path.resolve(process.cwd(), 'src/createApp.ts')
+    ).href}?routes-test-delete-sku=${Date.now()}`
+    const [{ createApp }, { pool: canonicalPool }] = await Promise.all([
+      import(createAppModuleUrl),
+      import(pathToFileURL(path.resolve(process.cwd(), 'src/db.ts')).href),
+    ])
+    appModulePool = canonicalPool as Pool
+
+    const app = createApp(process.env)
+    server = createServer(app)
+    server.listen(0)
+    await once(server, 'listening')
+
+    const { port } = server.address() as { port: number }
+
+    const loginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: '123456' }),
+    })
+
+    assert.equal(loginRes.status, 200)
+    const login = (await loginRes.json()) as { token: string }
+
+    const skuRes = await fetch(`http://127.0.0.1:${port}/api/skus`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${login.token}`,
+      },
+      body: JSON.stringify({
+        sku_code: `TEST-DELETE-${Date.now()}`,
+        name: 'Delete sku route test',
+        spec: '删除 SKU 测试',
+        unit_price: 1,
+        category: 'test',
+        status: 'active',
+      }),
+    })
+
+    assert.equal(skuRes.status, 200)
+    const sku = (await skuRes.json()) as { sku_id: string }
+
+    const form = new FormData()
+    form.append('files', new Blob([tinyPng], { type: 'image/png' }), 'cover.png')
+    form.append('files', new Blob([tinyPng], { type: 'image/png' }), 'detail.png')
+
+    const uploadRes = await fetch(`http://127.0.0.1:${port}/api/skus/${sku.sku_id}/images`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${login.token}` },
+      body: form,
+    })
+
+    const uploadBody = await uploadRes.text()
+    assert.equal(uploadRes.status, 201, uploadBody)
+    const uploadPayload = JSON.parse(uploadBody) as {
+      images: Array<{ image_id: string }>
+    }
+    const secondImageId = uploadPayload.images[1]?.image_id
+    assert.ok(secondImageId, 'expected second image id')
+
+    const deleteImageRes = await fetch(
+      `http://127.0.0.1:${port}/api/skus/${sku.sku_id}/images/${secondImageId}`,
+      {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${login.token}` },
+      }
+    )
+
+    const deleteImageBody = await deleteImageRes.text()
+    assert.equal(deleteImageRes.status, 200, deleteImageBody)
+    assert.equal((await listFilesRecursive(tempRoot)).length, 4)
+
+    const deleteSkuRes = await fetch(`http://127.0.0.1:${port}/api/skus/${sku.sku_id}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${login.token}` },
+    })
+
+    const deleteSkuBody = await deleteSkuRes.text()
+    assert.equal(deleteSkuRes.status, 200, deleteSkuBody)
+    assert.match(deleteSkuBody, /"ok":true/)
+
+    const persistedSkuRows = await running.pool.query<{ count: string }>(
+      `select count(*)::text as count
+       from skus
+       where sku_id = $1`,
+      [sku.sku_id]
+    )
+    assert.equal(Number(persistedSkuRows.rows[0]?.count ?? '0'), 0)
+
+    const persistedImageRows = await running.pool.query<{ count: string }>(
+      `select count(*)::text as count
+       from product_images
+       where sku_id = $1`,
+      [sku.sku_id]
+    )
+    assert.equal(Number(persistedImageRows.rows[0]?.count ?? '0'), 0)
+    assert.deepEqual(await listFilesRecursive(tempRoot), [])
+
+    const skuDetailRes = await fetch(`http://127.0.0.1:${port}/api/skus/${sku.sku_id}`, {
+      headers: { authorization: `Bearer ${login.token}` },
+    })
+    assert.equal(skuDetailRes.status, 404)
+  }
+)

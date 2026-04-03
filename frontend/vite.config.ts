@@ -49,18 +49,6 @@ export default defineConfig(({ mode }) => {
           background_color: '#ffffff',
           theme_color: '#aa3bff',
         },
-        workbox: {
-          // 简化配置：优先保证基础页面可离线访问。
-          runtimeCaching: [
-            {
-              urlPattern: ({ request }) =>
-                request.destination === 'script' ||
-                request.destination === 'style' ||
-                request.destination === 'document',
-              handler: 'StaleWhileRevalidate',
-            },
-          ],
-        },
       }),
     ],
   }

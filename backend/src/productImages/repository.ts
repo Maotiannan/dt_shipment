@@ -246,6 +246,38 @@ export async function listDeletedProductImages(db?: ProductImageDb) {
   return rows
 }
 
+export async function listProductImagesForSku(skuId: string, db?: ProductImageDb) {
+  const executor = getDb(db)
+  const { rows } = await executor.query<ProductImageRow>(
+    `select
+       image_id,
+       sku_id,
+       storage_key,
+       original_relpath,
+       thumb_relpath,
+       mime_type,
+       file_ext,
+       file_size,
+       width,
+       height,
+       sha256,
+       sort_order,
+       is_primary,
+       status,
+       deleted_at::text,
+       created_at::text,
+       updated_at::text
+     from product_images
+     where sku_id = $1
+     order by
+       case when status = 'active' then 0 else 1 end asc,
+       sort_order asc,
+       image_id asc`,
+    [skuId]
+  )
+  return rows
+}
+
 export async function listExpiredDeletedImages(retentionDays: number, db?: ProductImageDb) {
   const executor = getDb(db)
   const { rows } = await executor.query<ProductImageRow>(
@@ -393,6 +425,7 @@ export const productImageRepository = {
   getActiveProductImageById,
   getProductImageById,
   listDeletedProductImages,
+  listProductImagesForSku,
   listExpiredDeletedImages,
   setProductImagePrimary,
   setProductImageSortOrders,

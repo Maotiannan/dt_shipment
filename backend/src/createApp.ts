@@ -7,6 +7,7 @@ import { pool } from './db.js'
 import { requireAuth, signToken, type AuthPayload } from './auth.js'
 import { loadProductImageConfig } from './productImages/config.js'
 import { productImageRepository, type ProductImageRow } from './productImages/repository.js'
+import { removeTrashFilePair } from './productImages/fileStore.js'
 import { createProductImageRouter } from './productImages/routes.js'
 
 function toProductImageSummary(row: ProductImageRow) {
@@ -221,6 +222,58 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
       ...sku,
       images: images.map((image) => toProductImageSummary(image)),
     })
+  })
+
+  app.delete('/api/skus/:id', requireAuth, async (req, res) => {
+    const { id } = req.params
+    const skuId = String(id)
+    const client = await pool.connect()
+    let imageRows: ProductImageRow[] = []
+
+    try {
+      await client.query('begin')
+
+      const existingSku = await client.query<{ sku_id: string }>(
+        `select sku_id
+         from skus
+         where sku_id = $1
+         for update`,
+        [skuId]
+      )
+
+      if (existingSku.rows.length === 0) {
+        await client.query('rollback')
+        return res.status(404).json({ error: 'sku not found' })
+      }
+
+      imageRows = await productImageRepository.listProductImagesForSku(skuId, client)
+      await client.query(`delete from skus where sku_id = $1`, [skuId])
+      await client.query('commit')
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined)
+      throw error
+    } finally {
+      client.release()
+    }
+
+    await Promise.all(
+      imageRows.map((image) =>
+        removeTrashFilePair(
+          {
+            originalRelpath: image.original_relpath,
+            thumbRelpath: image.thumb_relpath,
+          },
+          env
+        ).catch((error) => {
+          console.error(
+            `failed to remove sku image files after sku delete: sku=${skuId} image=${image.image_id}`,
+            error
+          )
+        })
+      )
+    )
+
+    return res.json({ ok: true, deletedSkuId: skuId })
   })
 
   app.get('/api/orders', requireAuth, async (req, res) => {

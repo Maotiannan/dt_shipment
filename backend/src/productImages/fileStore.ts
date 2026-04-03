@@ -31,6 +31,10 @@ export const productImageFileIo = {
   rm: fs.rm.bind(fs),
 }
 
+function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
 function fileExtensionFromMime(mimeType: string) {
   if (mimeType === 'image/png') return '.png'
   if (mimeType === 'image/webp') return '.webp'
@@ -147,11 +151,23 @@ export async function movePersistedProductImageToTrash(
   await productImageFileIo.mkdir(path.dirname(trashThumbAbsPath), { recursive: true })
 
   try {
-    await productImageFileIo.rename(originalAbsPath, trashOriginalAbsPath)
-    movedPairs.push({ from: trashOriginalAbsPath, to: originalAbsPath })
+    try {
+      await productImageFileIo.rename(originalAbsPath, trashOriginalAbsPath)
+      movedPairs.push({ from: trashOriginalAbsPath, to: originalAbsPath })
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error
+      }
+    }
 
-    await productImageFileIo.rename(thumbAbsPath, trashThumbAbsPath)
-    movedPairs.push({ from: trashThumbAbsPath, to: thumbAbsPath })
+    try {
+      await productImageFileIo.rename(thumbAbsPath, trashThumbAbsPath)
+      movedPairs.push({ from: trashThumbAbsPath, to: thumbAbsPath })
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error
+      }
+    }
   } catch (error) {
     for (const pair of movedPairs.reverse()) {
       await productImageFileIo.rename(pair.from, pair.to).catch(() => undefined)

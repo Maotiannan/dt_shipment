@@ -138,9 +138,19 @@ async function main() {
   if (!login?.token) {
     throw new Error(`/api/auth/login did not return token: ${JSON.stringify(login)}`)
   }
+  if (!login?.user?.userId || !login?.user?.username) {
+    throw new Error(`/api/auth/login did not return user: ${JSON.stringify(login)}`)
+  }
 
   const authHeaders = {
     authorization: `Bearer ${login.token}`,
+  }
+
+  const me = await expectJson('/api/auth/me', {
+    headers: authHeaders,
+  })
+  if (me?.user?.username !== login.user.username) {
+    throw new Error(`/api/auth/me returned unexpected user: ${JSON.stringify(me)}`)
   }
 
   const sku = await expectJson('/api/skus', {
@@ -310,6 +320,61 @@ async function main() {
   await expectFileMissing(trashOriginalPath)
   await expectFileMissing(trashThumbPath)
 
+  const remainingRows = runSql(`
+    select coalesce(
+      json_agg(row_to_json(t)),
+      '[]'::json
+    )
+    from (
+      select image_id, original_relpath, thumb_relpath
+      from product_images
+      where sku_id = '${sku.sku_id}'
+      order by sort_order asc, created_at asc
+    ) t;
+  `)
+
+  const activeRow = remainingRows.find((row) => row.image_id === firstImage.image_id)
+  if (!activeRow?.original_relpath || !activeRow?.thumb_relpath) {
+    throw new Error(`active image row missing before sku delete: ${JSON.stringify(remainingRows)}`)
+  }
+
+  const activeOriginalPath = path.resolve(productImageRoot, activeRow.original_relpath)
+  const activeThumbPath = path.resolve(productImageRoot, activeRow.thumb_relpath)
+
+  const deleteSku = await expectJson(`/api/skus/${sku.sku_id}`, {
+    method: 'DELETE',
+    headers: authHeaders,
+  })
+  if (!deleteSku?.ok || deleteSku.deletedSkuId !== sku.sku_id) {
+    throw new Error(`sku delete returned unexpected payload: ${JSON.stringify(deleteSku)}`)
+  }
+
+  const deletedSkuResponse = await fetch(`${baseUrl}/api/skus/${sku.sku_id}`, {
+    headers: authHeaders,
+  })
+  if (deletedSkuResponse.status !== 404) {
+    const payload = await deletedSkuResponse.text()
+    throw new Error(`deleted sku should return 404, got ${deletedSkuResponse.status}: ${payload}`)
+  }
+
+  const afterSkuDeleteRows = runSql(`
+    select coalesce(
+      json_agg(row_to_json(t)),
+      '[]'::json
+    )
+    from (
+      select image_id
+      from product_images
+      where sku_id = '${sku.sku_id}'
+    ) t;
+  `)
+  if (Array.isArray(afterSkuDeleteRows) && afterSkuDeleteRows.length !== 0) {
+    throw new Error(`sku delete left image rows behind: ${JSON.stringify(afterSkuDeleteRows)}`)
+  }
+
+  await expectFileMissing(activeOriginalPath)
+  await expectFileMissing(activeThumbPath)
+
   const result = {
     ok: true,
     baseUrl,
@@ -317,6 +382,7 @@ async function main() {
     skuId: sku.sku_id,
     uploadedImages: upload.images.length,
     cleanup,
+    deletedSkuId: deleteSku.deletedSkuId,
     checkedAt: new Date().toISOString(),
   }
 

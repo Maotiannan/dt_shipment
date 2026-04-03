@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiRequest } from '../lib/apiClient'
+import { upsertItemById } from '../lib/collectionState'
 
 type BizType = 'wholesale' | 'retail' | 'mixed'
 type AccountStatus = 'active' | 'inactive'
@@ -97,7 +98,7 @@ export default function AccountsPage() {
     setErrorMsg(null)
     try {
       if (modalMode === 'create') {
-        await apiRequest('/api/accounts', {
+        const saved = await apiRequest<FishAccount>('/api/accounts', {
           method: 'POST',
           body: JSON.stringify({
             account_name: form.account_name.trim(),
@@ -106,8 +107,16 @@ export default function AccountsPage() {
             status: form.status,
           }),
         })
+        setAccounts((current) =>
+          upsertItemById(
+            current,
+            saved,
+            (row) => row.account_id,
+            (left, right) => right.created_at.localeCompare(left.created_at)
+          )
+        )
       } else {
-        await apiRequest(`/api/accounts/${editingId}`, {
+        const saved = await apiRequest<FishAccount>(`/api/accounts/${editingId}`, {
           method: 'PUT',
           body: JSON.stringify({
             account_name: form.account_name.trim(),
@@ -116,10 +125,10 @@ export default function AccountsPage() {
             status: form.status,
           })
         })
+        setAccounts((current) => upsertItemById(current, saved, (row) => row.account_id))
       }
 
       setModalOpen(false)
-      await loadAccounts()
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : '保存失败')
     } finally {
@@ -134,7 +143,7 @@ export default function AccountsPage() {
     setSaving(true)
     setErrorMsg(null)
     try {
-      await apiRequest(`/api/accounts/${a.account_id}`, {
+      const saved = await apiRequest<FishAccount>(`/api/accounts/${a.account_id}`, {
         method: 'PUT',
         body: JSON.stringify({
           account_name: a.account_name,
@@ -143,7 +152,7 @@ export default function AccountsPage() {
           status: 'inactive',
         }),
       })
-      await loadAccounts()
+      setAccounts((current) => upsertItemById(current, saved, (row) => row.account_id))
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : '停用失败')
     } finally {
@@ -376,4 +385,3 @@ export default function AccountsPage() {
     </div>
   )
 }
-

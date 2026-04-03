@@ -52,7 +52,7 @@ PostgreSQL 的热数据目录不能直接放在 SMB 共享上。原因是 Postgr
 - 缩略图目录: `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products/thumbs`
 - 回收站目录: `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products/trash`
 - 数据库只保存 `sku_id`、排序、主图标记、相对路径、尺寸、哈希和删除状态等元数据
-- 前端商品列表优先读取缩略图，点击后再按需加载原图
+- 前端商品列表与 SKU 编辑页优先读取紧凑缩略图，点击后再弹层加载大图预览
 - 所有图片读取都经由 `dt_shipment` 后端鉴权代理，不复用 Alist / PicList 的公开访问范围
 
 ## 目录结构
@@ -177,7 +177,10 @@ npm run test:smoke
 - `PATCH /api/skus/:id/images/reorder`
 - `PATCH /api/skus/:id/images/:imageId/primary`
 - `DELETE /api/skus/:id/images/:imageId`
+- `DELETE /api/skus/:id`
 - `POST /api/internal/jobs/cleanup-product-images`
+
+当前脚本会在结束前自动删除自己创建的 smoke SKU 和残留图片文件，不再把测试数据留在生产库里。
 
 如果要直接验证公网入口，可额外执行:
 
@@ -227,6 +230,7 @@ npm run dev
 | `GET /api/accounts` | 账号列表 |
 | `GET /api/skus` | 商品列表 |
 | `GET /api/skus/:id` | 商品详情与图片列表 |
+| `DELETE /api/skus/:id` | 删除 SKU，并清理关联图片文件 |
 | `POST /api/skus/:id/images` | 上传商品图片 |
 | `GET /api/product-images/:imageId/thumb` | 鉴权读取缩略图 |
 | `GET /api/product-images/:imageId/original` | 鉴权读取原图 |

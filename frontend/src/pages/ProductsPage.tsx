@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiRequest } from '../lib/apiClient'
+import { removeItemById, upsertItemById } from '../lib/collectionState'
 import { fetchProtectedImageObjectUrl, type ProductImageSummary } from '../lib/productImagesApi'
 import { getPrimaryProductImage } from '../lib/productImageState'
 import ProductImageManager from '../components/ProductImageManager'
@@ -32,6 +33,10 @@ function syncSkuPrimaryThumb(
         }
       : item
   )
+}
+
+function sortSkusByCreatedAtDesc(left: FishSku, right: FishSku) {
+  return right.created_at.localeCompare(left.created_at)
 }
 
 function SkuThumbCell({
@@ -212,19 +217,33 @@ export default function ProductsPage() {
       }
 
       if (mode === 'create') {
-        await apiRequest('/api/skus', {
+        const saved = await apiRequest<FishSku>('/api/skus', {
           method: 'POST',
           body: JSON.stringify(payload),
         })
+        setSkus((current) =>
+          upsertItemById(current, { ...saved, primary_image_thumb_url: null }, (row) => row.sku_id, sortSkusByCreatedAtDesc)
+        )
       } else {
-        await apiRequest(`/api/skus/${editingId}`, {
+        const saved = await apiRequest<FishSku>(`/api/skus/${editingId}`, {
           method: 'PUT',
           body: JSON.stringify(payload),
+        })
+        setSkus((current) => {
+          const existing = current.find((row) => row.sku_id === editingId)
+          return upsertItemById(
+            current,
+            {
+              ...saved,
+              primary_image_thumb_url: existing?.primary_image_thumb_url ?? null,
+            },
+            (row) => row.sku_id,
+            sortSkusByCreatedAtDesc
+          )
         })
       }
 
       setModalOpen(false)
-      await loadSkus()
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : '保存失败')
     } finally {
@@ -239,7 +258,7 @@ export default function ProductsPage() {
     setSaving(true)
     setErrorMsg(null)
     try {
-      await apiRequest(`/api/skus/${s.sku_id}`, {
+      const saved = await apiRequest<FishSku>(`/api/skus/${s.sku_id}`, {
         method: 'PUT',
         body: JSON.stringify({
           sku_code: s.sku_code,
@@ -251,9 +270,41 @@ export default function ProductsPage() {
           inventory_id: null,
         }),
       })
-      await loadSkus()
+      setSkus((current) => {
+        const existing = current.find((row) => row.sku_id === s.sku_id)
+        return upsertItemById(
+          current,
+          {
+            ...saved,
+            primary_image_thumb_url: existing?.primary_image_thumb_url ?? null,
+          },
+          (row) => row.sku_id,
+          sortSkusByCreatedAtDesc
+        )
+      })
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : '停用失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete(s: FishSku) {
+    const ok = confirm(`确定删除 SKU「${s.name}」？关联图片会一起删除，历史订单里的快照文本仍保留。`)
+    if (!ok) return
+
+    setSaving(true)
+    setErrorMsg(null)
+    try {
+      await apiRequest(`/api/skus/${s.sku_id}`, {
+        method: 'DELETE',
+      })
+      setSkus((current) => removeItemById(current, s.sku_id, (row) => row.sku_id))
+      if (editingId === s.sku_id) {
+        setModalOpen(false)
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : '删除 SKU 失败')
     } finally {
       setSaving(false)
     }
@@ -262,7 +313,7 @@ export default function ProductsPage() {
   return (
     <div className="page">
       <h2 className="pageTitle">产品库（SKU CRUD）</h2>
-      <p className="pageSub">新增/编辑/停用 SKU，为订单录入提供自动带出单价。</p>
+      <p className="pageSub">新增/编辑/停用/删除 SKU，为订单录入提供自动带出单价。</p>
 
       <div style={{ marginTop: 12, display: 'flex', gap: 10 }}>
         <input
@@ -368,7 +419,10 @@ export default function ProductsPage() {
                       </button>
                     ) : (
                       <span style={{ opacity: 0.7, fontSize: 12 }}>已停用</span>
-                    )}
+                    )}{' '}
+                    <button className="ghostBtn" onClick={() => handleDelete(s)} disabled={saving}>
+                      删除
+                    </button>
                   </td>
                 </tr>
               ))}

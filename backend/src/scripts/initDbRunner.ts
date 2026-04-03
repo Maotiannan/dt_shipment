@@ -154,11 +154,29 @@ with canonical_active_images as (
   where status = 'active'
 )
 update product_images as target
-set is_primary = canonical_active_images.canonical_rank = 1
+set is_primary = false
+  , updated_at = now()
+where target.status = 'active'
+  and target.is_primary;
+
+with canonical_active_images as (
+  select
+    image_id,
+    sku_id,
+    row_number() over (
+      partition by sku_id
+      order by sort_order, image_id
+    ) as canonical_rank
+  from product_images
+  where status = 'active'
+)
+update product_images as target
+set is_primary = true
   , updated_at = now()
 from canonical_active_images
 where target.image_id = canonical_active_images.image_id
-  and target.is_primary is distinct from (canonical_active_images.canonical_rank = 1);
+  and canonical_active_images.canonical_rank = 1
+  and target.is_primary is distinct from true;
 `
 
 const LEGACY_PRODUCT_IMAGE_INDEX_SQL = `

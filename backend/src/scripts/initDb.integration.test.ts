@@ -649,6 +649,32 @@ dbTest('db:init leaves product_images convergence no-op on clean steady-state bo
   })
 
   await withDisposablePostgres(async (pool) => {
+    await seedWrongPrimaryState(pool)
+    await pool.query(`
+      create unique index product_images_active_sku_sort_uidx
+        on product_images(sku_id, sort_order)
+        where status = 'active';
+    `)
+    await pool.query(`
+      create unique index product_images_active_primary_uidx
+        on product_images(sku_id)
+        where status = 'active' and is_primary;
+    `)
+
+    await runInitDb(pool, schemaSql)
+
+    const state = await readProductImageState(pool)
+    assert.deepEqual(
+      state.rows.map((row) => [row.image_id, row.sort_order, row.is_primary]),
+      [
+        ['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 1, true],
+        ['bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 2, false],
+        ['cccccccc-cccc-cccc-cccc-cccccccccccc', 3, false],
+      ]
+    )
+  })
+
+  await withDisposablePostgres(async (pool) => {
     await seedPartialProductImagesTable(pool)
     await runInitDb(pool, schemaSql)
 

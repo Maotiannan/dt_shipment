@@ -6,11 +6,12 @@ import { APP_META } from '../lib/runtimeConfig'
 
 export default function TopBar({ rightExtra }: { rightExtra?: ReactNode }) {
   const navigate = useNavigate()
-  const { session, loading } = useAuthSession()
+  const { session, loading, clearSession } = useAuthSession()
 
   async function handleLogout() {
     try {
       clearToken()
+      clearSession()
     } catch {
       // 忽略退出失败，仍跳回登录页
     } finally {

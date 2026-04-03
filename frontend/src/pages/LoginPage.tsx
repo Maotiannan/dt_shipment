@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiRequest, setToken } from '../lib/apiClient'
+import { useAuthSession } from '../lib/authSession'
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const { setAuthenticatedUser } = useAuthSession()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -13,11 +15,14 @@ export default function LoginPage() {
     setLoading(true)
     setErrorMsg(null)
     try {
-      const data = await apiRequest<{ token: string }>('/api/auth/login', {
+      const data = await apiRequest<{ token: string; user: { userId: number; username: string } }>(
+        '/api/auth/login',
+        {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       })
       setToken(data.token)
+      setAuthenticatedUser(data.user)
       navigate('/dashboard')
     } catch (err) {
       const message =
@@ -93,4 +98,3 @@ export default function LoginPage() {
     </div>
   )
 }
-
