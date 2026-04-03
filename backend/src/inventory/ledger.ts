@@ -23,6 +23,10 @@ export type InventoryMovementReason =
   | 'manual_adjustment'
 
 type InventoryQueryClient = Pick<PoolClient, 'query'>
+type InventoryState = Map<string, number>
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export class InventoryLedgerError extends Error {
   constructor(
@@ -48,9 +52,38 @@ function toFiniteNumber(value: unknown) {
   return null
 }
 
+function ensureValidSkuId(value: unknown) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new InventoryLedgerError('sku_id must be a UUID for inventory-managed items', 400)
+  }
+
+  const skuId = value.trim()
+  if (!UUID_PATTERN.test(skuId)) {
+    throw new InventoryLedgerError(`invalid sku_id: ${skuId}`, 400)
+  }
+
+  return skuId
+}
+
+function ensureValidQuantity(value: unknown, skuId: string) {
+  const quantity = toFiniteNumber(value)
+  if (quantity === null || !Number.isInteger(quantity) || quantity <= 0) {
+    throw new InventoryLedgerError(
+      `quantity must be a positive integer for sku ${skuId}`,
+      400
+    )
+  }
+
+  return quantity
+}
+
 export function normalizeInventoryItems(items: unknown): InventoryLine[] {
-  if (!Array.isArray(items)) {
+  if (items == null) {
     return []
+  }
+
+  if (!Array.isArray(items)) {
+    throw new InventoryLedgerError('items must be an array', 400)
   }
 
   return items.flatMap((item) => {
@@ -58,18 +91,22 @@ export function normalizeInventoryItems(items: unknown): InventoryLine[] {
       return []
     }
 
-    const skuId =
-      typeof item.sku_id === 'string' && item.sku_id.trim().length > 0
-        ? item.sku_id.trim()
-        : null
-    const quantity = toFiniteNumber(item.qty)
-
-    if (!skuId || quantity === null || quantity <= 0) {
+    const rawItem = item as { sku_id?: unknown; qty?: unknown }
+    if (rawItem.sku_id == null) {
       return []
     }
 
+    const skuId = ensureValidSkuId(rawItem.sku_id)
+    const quantity = ensureValidQuantity(rawItem.qty, skuId)
+
     return [{ skuId, quantity }]
   })
+}
+
+export function collectInventoryLockSkuIds(before: InventoryLine[], after: InventoryLine[]) {
+  return Array.from(new Set([...before.map((item) => item.skuId), ...after.map((item) => item.skuId)])).sort(
+    (left, right) => left.localeCompare(right)
+  )
 }
 
 export function computeInventoryDelta(before: InventoryLine[], after: InventoryLine[]) {
@@ -99,11 +136,34 @@ export function ensureInventoryAvailable(items: InventoryAvailability[]) {
   }
 }
 
+async function lockInventoryStateTx(client: InventoryQueryClient, skuIds: string[]) {
+  if (skuIds.length === 0) {
+    return new Map<string, number>()
+  }
+
+  const { rows } = await client.query<{
+    sku_id: string
+    inventory_quantity: number | null
+  }>(
+    `select sku_id, inventory_quantity
+     from skus
+     where sku_id = any($1::uuid[])
+     order by sku_id asc
+     for update`,
+    [skuIds]
+  )
+
+  return new Map(
+    rows.map((row) => [row.sku_id, Number(row.inventory_quantity ?? 0)] as const)
+  )
+}
+
 export async function applyInventoryMovementTx(params: {
   client: InventoryQueryClient
   orderId?: string | null
   beforeItems?: InventoryLine[]
   afterItems?: InventoryLine[]
+  inventoryState?: InventoryState
   reason: InventoryMovementReason
   remark?: string | null
 }) {
@@ -113,21 +173,11 @@ export async function applyInventoryMovementTx(params: {
     return []
   }
 
-  const skuIds = delta.map((item) => item.skuId)
-  const { rows } = await params.client.query<{
-    sku_id: string
-    inventory_quantity: number | null
-  }>(
-    `select sku_id, inventory_quantity
-     from skus
-     where sku_id = any($1::uuid[])
-     for update`,
-    [skuIds]
+  const skuIds = Array.from(new Set(delta.map((item) => item.skuId))).sort((left, right) =>
+    left.localeCompare(right)
   )
-
-  const inventoryBySkuId = new Map(
-    rows.map((row) => [row.sku_id, Number(row.inventory_quantity ?? 0)] as const)
-  )
+  const inventoryBySkuId =
+    params.inventoryState ?? (await lockInventoryStateTx(params.client, skuIds))
 
   const missingSkuId = skuIds.find((skuId) => !inventoryBySkuId.has(skuId))
   if (missingSkuId) {
@@ -142,6 +192,8 @@ export async function applyInventoryMovementTx(params: {
   ensureInventoryAvailable(nextInventory)
 
   for (const movement of delta) {
+    const nextQuantity = nextInventory.find((item) => item.skuId === movement.skuId)?.nextQuantity
+
     await params.client.query(
       `insert into inventory_movements(sku_id, order_id, delta_quantity, reason, remark)
        values ($1, $2, $3, $4, $5)`,
@@ -160,7 +212,19 @@ export async function applyInventoryMovementTx(params: {
        where sku_id = $2`,
       [movement.delta, movement.skuId]
     )
+
+    if (typeof nextQuantity === 'number') {
+      inventoryBySkuId.set(movement.skuId, nextQuantity)
+    }
   }
 
   return nextInventory
+}
+
+export async function lockInventoryStateForOrderChangeTx(
+  client: InventoryQueryClient,
+  beforeItems: InventoryLine[],
+  afterItems: InventoryLine[]
+) {
+  return lockInventoryStateTx(client, collectInventoryLockSkuIds(beforeItems, afterItems))
 }

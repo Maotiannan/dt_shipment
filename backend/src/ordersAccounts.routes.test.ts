@@ -160,6 +160,81 @@ async function postJson(port: number, pathname: string, token: string, body: unk
   return { response, text }
 }
 
+async function putJson(port: number, pathname: string, token: string, body: unknown) {
+  const response = await fetch(`http://127.0.0.1:${port}${pathname}`, {
+    method: 'PUT',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  })
+  const text = await response.text()
+  return { response, text }
+}
+
+async function seedSku(
+  pool: Pool,
+  sku: {
+    skuId: string
+    name: string
+    inventoryQuantity: number
+  }
+) {
+  await pool.query(
+    `insert into skus(sku_id, name, status, inventory_quantity)
+     values ($1, $2, 'active', $3)`,
+    [sku.skuId, sku.name, sku.inventoryQuantity]
+  )
+}
+
+async function readSkuInventory(pool: Pool, skuId: string) {
+  const { rows } = await pool.query<{ inventory_quantity: number | null }>(
+    `select inventory_quantity
+     from skus
+     where sku_id = $1`,
+    [skuId]
+  )
+
+  return Number(rows[0]?.inventory_quantity ?? 0)
+}
+
+async function readInventoryMovements(pool: Pool, orderId: string) {
+  const { rows } = await pool.query<{
+    sku_id: string
+    delta_quantity: number
+    reason: string
+  }>(
+    `select sku_id, delta_quantity, reason
+     from inventory_movements
+     where order_id = $1
+     order by created_at asc, movement_id asc`,
+    [orderId]
+  )
+
+  const reasonRank = new Map([
+    ['order_create', 1],
+    ['order_update_revert', 2],
+    ['order_update_apply', 3],
+    ['order_delete_revert', 4],
+    ['manual_adjustment', 5],
+  ])
+
+  return rows
+    .map((row) => ({
+      sku_id: row.sku_id,
+      delta_quantity: Number(row.delta_quantity),
+      reason: row.reason,
+    }))
+    .sort(
+      (left, right) =>
+        (reasonRank.get(left.reason) ?? Number.MAX_SAFE_INTEGER) -
+          (reasonRank.get(right.reason) ?? Number.MAX_SAFE_INTEGER) ||
+        left.sku_id.localeCompare(right.sku_id) ||
+        left.delta_quantity - right.delta_quantity
+    )
+}
+
 test.after(async () => {
   await appModulePool?.end().catch(() => undefined)
 
@@ -404,5 +479,191 @@ dbTest(
     const getDeletedBody = await getDeletedRes.text()
     assert.equal(getDeletedRes.status, 404, getDeletedBody)
     assert.match(getDeletedBody, /order/i)
+  }
+)
+
+dbTest(
+  'orders apply inventory deductions, recompute updates, restore deletes, and record movements',
+  { concurrency: false },
+  async (t) => {
+    const runningDb = await getSharedRunningDatabase()
+    const { port, token } = await startTestApp(t)
+
+    const accountRes = await postJson(port, '/api/accounts', token, {
+      account_name: 'Inventory Account',
+      remark: null,
+      biz_type: 'mixed',
+      status: 'active',
+    })
+    assert.equal(accountRes.response.status, 200, accountRes.text)
+    const account = JSON.parse(accountRes.text) as { account_id: string }
+
+    const skuA = '11111111-1111-1111-1111-111111111111'
+    const skuB = '22222222-2222-2222-2222-222222222222'
+    await seedSku(runningDb.pool, {
+      skuId: skuA,
+      name: 'Inventory A',
+      inventoryQuantity: 10,
+    })
+    await seedSku(runningDb.pool, {
+      skuId: skuB,
+      name: 'Inventory B',
+      inventoryQuantity: 4,
+    })
+
+    const orderId = `ORDER-INVENTORY-${Date.now()}`
+    const createRes = await postJson(port, '/api/orders', token, {
+      order_id: orderId,
+      account_id: account.account_id,
+      order_type: 'wholesale',
+      buyer_name: 'Inventory Buyer',
+      shipping_address: 'Shanghai Jingan',
+      items: [{ sku_id: skuA, inventory_id: null, name: 'Inventory A', qty: 2, unit_price: 11 }],
+      total_amount: 22,
+      ship_status: 'pending',
+      tracking_number: null,
+      tracking_method: null,
+      is_abnormal: false,
+      abnormal_type: null,
+      remark: null,
+      settlement_status: 'unpaid',
+      paid_amount: 0,
+    })
+    assert.equal(createRes.response.status, 200, createRes.text)
+    assert.equal(await readSkuInventory(runningDb.pool, skuA), 8)
+    assert.equal(await readSkuInventory(runningDb.pool, skuB), 4)
+    assert.deepEqual(await readInventoryMovements(runningDb.pool, orderId), [
+      { sku_id: skuA, delta_quantity: -2, reason: 'order_create' },
+    ])
+
+    const updateRes = await putJson(port, `/api/orders/${orderId}`, token, {
+      account_id: account.account_id,
+      order_type: 'wholesale',
+      buyer_name: 'Inventory Buyer Updated',
+      shipping_address: 'Suzhou SIP',
+      items: [
+        { sku_id: skuA, inventory_id: null, name: 'Inventory A', qty: 1, unit_price: 11 },
+        { sku_id: skuB, inventory_id: null, name: 'Inventory B', qty: 3, unit_price: 7 },
+      ],
+      total_amount: 32,
+      ship_status: 'pending',
+      tracking_number: null,
+      tracking_method: null,
+      is_abnormal: false,
+      abnormal_type: null,
+      remark: 'inventory update',
+      settlement_status: 'unpaid',
+      paid_amount: 0,
+      paid_at: null,
+      paid_remark: null,
+      shipped_at: null,
+    })
+    assert.equal(updateRes.response.status, 200, updateRes.text)
+    assert.equal(await readSkuInventory(runningDb.pool, skuA), 9)
+    assert.equal(await readSkuInventory(runningDb.pool, skuB), 1)
+    assert.deepEqual(await readInventoryMovements(runningDb.pool, orderId), [
+      { sku_id: skuA, delta_quantity: -2, reason: 'order_create' },
+      { sku_id: skuA, delta_quantity: 2, reason: 'order_update_revert' },
+      { sku_id: skuA, delta_quantity: -1, reason: 'order_update_apply' },
+      { sku_id: skuB, delta_quantity: -3, reason: 'order_update_apply' },
+    ])
+
+    const insufficientOrderRes = await postJson(port, '/api/orders', token, {
+      order_id: `${orderId}-INSUFFICIENT`,
+      account_id: account.account_id,
+      order_type: 'wholesale',
+      buyer_name: 'Inventory Buyer Overflow',
+      shipping_address: 'Shanghai',
+      items: [{ sku_id: skuB, inventory_id: null, name: 'Inventory B', qty: 5, unit_price: 7 }],
+      total_amount: 35,
+      ship_status: 'pending',
+      tracking_number: null,
+      tracking_method: null,
+      is_abnormal: false,
+      abnormal_type: null,
+      remark: null,
+      settlement_status: 'unpaid',
+      paid_amount: 0,
+    })
+    assert.equal(insufficientOrderRes.response.status, 409, insufficientOrderRes.text)
+    assert.match(insufficientOrderRes.text, /inventory/i)
+    assert.equal(await readSkuInventory(runningDb.pool, skuA), 9)
+    assert.equal(await readSkuInventory(runningDb.pool, skuB), 1)
+    assert.deepEqual(await readInventoryMovements(runningDb.pool, `${orderId}-INSUFFICIENT`), [])
+
+    const deleteRes = await fetch(`http://127.0.0.1:${port}/api/orders/${orderId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    const deleteBody = await deleteRes.text()
+    assert.equal(deleteRes.status, 200, deleteBody)
+    assert.equal(await readSkuInventory(runningDb.pool, skuA), 10)
+    assert.equal(await readSkuInventory(runningDb.pool, skuB), 4)
+    assert.deepEqual(await readInventoryMovements(runningDb.pool, orderId), [
+      { sku_id: skuA, delta_quantity: -2, reason: 'order_create' },
+      { sku_id: skuA, delta_quantity: 2, reason: 'order_update_revert' },
+      { sku_id: skuA, delta_quantity: -1, reason: 'order_update_apply' },
+      { sku_id: skuB, delta_quantity: -3, reason: 'order_update_apply' },
+      { sku_id: skuA, delta_quantity: 1, reason: 'order_delete_revert' },
+      { sku_id: skuB, delta_quantity: 3, reason: 'order_delete_revert' },
+    ])
+  }
+)
+
+dbTest(
+  'orders reject malformed sku ids and invalid quantities as request errors',
+  { concurrency: false },
+  async (t) => {
+    const runningDb = await getSharedRunningDatabase()
+    const { port, token } = await startTestApp(t)
+
+    const accountRes = await postJson(port, '/api/accounts', token, {
+      account_name: 'Validation Account',
+      remark: null,
+      biz_type: 'mixed',
+      status: 'active',
+    })
+    assert.equal(accountRes.response.status, 200, accountRes.text)
+    const account = JSON.parse(accountRes.text) as { account_id: string }
+
+    const validSkuId = '33333333-3333-3333-3333-333333333333'
+    await seedSku(runningDb.pool, {
+      skuId: validSkuId,
+      name: 'Validation SKU',
+      inventoryQuantity: 6,
+    })
+
+    const malformedSkuRes = await postJson(port, '/api/orders', token, {
+      order_id: `ORDER-BAD-SKU-${Date.now()}`,
+      account_id: account.account_id,
+      order_type: 'wholesale',
+      buyer_name: 'Bad SKU Buyer',
+      shipping_address: 'Shanghai',
+      items: [{ sku_id: 'not-a-uuid', inventory_id: null, name: 'Broken', qty: 1, unit_price: 1 }],
+      total_amount: 1,
+      ship_status: 'pending',
+      is_abnormal: false,
+      settlement_status: 'unpaid',
+      paid_amount: 0,
+    })
+    assert.equal(malformedSkuRes.response.status, 400, malformedSkuRes.text)
+    assert.match(malformedSkuRes.text, /sku/i)
+
+    const malformedQtyRes = await postJson(port, '/api/orders', token, {
+      order_id: `ORDER-BAD-QTY-${Date.now()}`,
+      account_id: account.account_id,
+      order_type: 'wholesale',
+      buyer_name: 'Bad Qty Buyer',
+      shipping_address: 'Shanghai',
+      items: [{ sku_id: validSkuId, inventory_id: null, name: 'Broken Qty', qty: 'oops', unit_price: 1 }],
+      total_amount: 1,
+      ship_status: 'pending',
+      is_abnormal: false,
+      settlement_status: 'unpaid',
+      paid_amount: 0,
+    })
+    assert.equal(malformedQtyRes.response.status, 400, malformedQtyRes.text)
+    assert.match(malformedQtyRes.text, /quantity/i)
+    assert.equal(await readSkuInventory(runningDb.pool, validSkuId), 6)
   }
 )

@@ -6,6 +6,7 @@ import { appMeta } from './appMeta.js'
 import { pool } from './db.js'
 import {
   applyInventoryMovementTx,
+  lockInventoryStateForOrderChangeTx,
   InventoryLedgerError,
   normalizeInventoryItems,
 } from './inventory/ledger.js'
@@ -445,18 +446,28 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
         return res.status(404).json({ error: 'order not found' })
       }
 
+      const beforeItems = normalizeInventoryItems(existingOrder.rows[0].items)
+      const afterItems = normalizeInventoryItems(b.items)
+      const inventoryState = await lockInventoryStateForOrderChangeTx(
+        client,
+        beforeItems,
+        afterItems
+      )
+
       await applyInventoryMovementTx({
         client,
         orderId: id,
-        beforeItems: normalizeInventoryItems(existingOrder.rows[0].items),
+        beforeItems,
         afterItems: [],
+        inventoryState,
         reason: 'order_update_revert',
       })
       await applyInventoryMovementTx({
         client,
         orderId: id,
         beforeItems: [],
-        afterItems: normalizeInventoryItems(b.items),
+        afterItems,
+        inventoryState,
         reason: 'order_update_apply',
       })
 
@@ -593,6 +604,7 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
     const client = await pool.connect()
     try {
       await client.query('begin')
+      // Legacy bulk upsert bypasses the inventory ledger and must stay sku-less.
       for (const r of rows) {
         await client.query(
           `insert into orders(
