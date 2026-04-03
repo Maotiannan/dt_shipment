@@ -4,6 +4,11 @@ import express from 'express'
 
 import { appMeta } from './appMeta.js'
 import { pool } from './db.js'
+import {
+  applyInventoryMovementTx,
+  InventoryLedgerError,
+  normalizeInventoryItems,
+} from './inventory/ledger.js'
 import { requireAuth, signToken, type AuthPayload } from './auth.js'
 import { loadProductImageConfig } from './productImages/config.js'
 import { productImageRepository, type ProductImageRow } from './productImages/repository.js'
@@ -44,6 +49,10 @@ async function listPrimaryImageThumbUrlsForSkus(skuIds: string[]) {
   return new Map(
     rows.map((row) => [row.sku_id, `/api/product-images/${row.image_id}/thumb`] as const)
   )
+}
+
+function isInventoryLedgerError(error: unknown): error is InventoryLedgerError {
+  return error instanceof InventoryLedgerError
 }
 
 export function createApp(env: NodeJS.ProcessEnv = process.env) {
@@ -337,35 +346,60 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
 
   app.post('/api/orders', requireAuth, async (req, res) => {
     const b = req.body
-    const { rows } = await pool.query(
-      `insert into orders(
-        order_id,account_id,order_type,buyer_name,shipping_address,items,total_amount,
-        ship_status,tracking_number,tracking_method,is_abnormal,abnormal_type,remark,
-        settlement_status,paid_amount,shipped_at
-      ) values (
-        $1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+    const client = await pool.connect()
+
+    try {
+      await client.query('begin')
+      await applyInventoryMovementTx({
+        client,
+        orderId: b.order_id,
+        beforeItems: [],
+        afterItems: normalizeInventoryItems(b.items),
+        reason: 'order_create',
+      })
+
+      const { rows } = await client.query(
+        `insert into orders(
+          order_id,account_id,order_type,buyer_name,shipping_address,items,total_amount,
+          ship_status,tracking_number,tracking_method,is_abnormal,abnormal_type,remark,
+          settlement_status,paid_amount,shipped_at
+        ) values (
+          $1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+        )
+        returning *`,
+        [
+          b.order_id,
+          b.account_id,
+          b.order_type,
+          b.buyer_name,
+          b.shipping_address,
+          JSON.stringify(b.items ?? []),
+          b.total_amount ?? 0,
+          b.ship_status ?? 'pending',
+          b.tracking_number ?? null,
+          b.tracking_method ?? null,
+          b.is_abnormal ?? false,
+          b.abnormal_type ?? null,
+          b.remark ?? null,
+          b.settlement_status ?? null,
+          b.paid_amount ?? 0,
+          b.shipped_at ?? null,
+        ]
       )
-      returning *`,
-      [
-        b.order_id,
-        b.account_id,
-        b.order_type,
-        b.buyer_name,
-        b.shipping_address,
-        JSON.stringify(b.items ?? []),
-        b.total_amount ?? 0,
-        b.ship_status ?? 'pending',
-        b.tracking_number ?? null,
-        b.tracking_method ?? null,
-        b.is_abnormal ?? false,
-        b.abnormal_type ?? null,
-        b.remark ?? null,
-        b.settlement_status ?? null,
-        b.paid_amount ?? 0,
-        b.shipped_at ?? null,
-      ]
-    )
-    res.json(rows[0])
+
+      await client.query('commit')
+      return res.json(rows[0])
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined)
+
+      if (isInventoryLedgerError(error)) {
+        return res.status(error.statusCode).json({ error: error.message })
+      }
+
+      throw error
+    } finally {
+      client.release()
+    }
   })
 
   app.patch('/api/orders/:id', requireAuth, async (req, res) => {
@@ -391,60 +425,101 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
   })
 
   app.put('/api/orders/:id', requireAuth, async (req, res) => {
-    const { id } = req.params
+    const id = String(req.params.id)
     const b = req.body
-    const { rows } = await pool.query(
-      `update orders
-       set account_id=$1,
-           order_type=$2,
-           buyer_name=$3,
-           shipping_address=$4,
-           items=$5::jsonb,
-           total_amount=$6,
-           ship_status=$7,
-           tracking_number=$8,
-           tracking_method=$9,
-           is_abnormal=$10,
-           abnormal_type=$11,
-           remark=$12,
-           settlement_status=$13,
-           paid_amount=$14,
-           paid_at=$15,
-           paid_remark=$16,
-           shipped_at=$17
-       where order_id=$18
-       returning *`,
-      [
-        b.account_id,
-        b.order_type,
-        b.buyer_name,
-        b.shipping_address,
-        JSON.stringify(b.items ?? []),
-        b.total_amount ?? 0,
-        b.ship_status ?? 'pending',
-        b.tracking_number ?? null,
-        b.tracking_method ?? null,
-        b.is_abnormal ?? false,
-        b.abnormal_type ?? null,
-        b.remark ?? null,
-        b.settlement_status ?? null,
-        b.paid_amount ?? 0,
-        b.paid_at ?? null,
-        b.paid_remark ?? null,
-        b.shipped_at ?? null,
-        id,
-      ]
-    )
+    const client = await pool.connect()
 
-    if (!rows[0]) {
-      return res.status(404).json({ error: 'order not found' })
+    try {
+      await client.query('begin')
+
+      const existingOrder = await client.query<{ items: unknown }>(
+        `select items
+         from orders
+         where order_id = $1
+         for update`,
+        [id]
+      )
+
+      if (!existingOrder.rows[0]) {
+        await client.query('rollback')
+        return res.status(404).json({ error: 'order not found' })
+      }
+
+      await applyInventoryMovementTx({
+        client,
+        orderId: id,
+        beforeItems: normalizeInventoryItems(existingOrder.rows[0].items),
+        afterItems: [],
+        reason: 'order_update_revert',
+      })
+      await applyInventoryMovementTx({
+        client,
+        orderId: id,
+        beforeItems: [],
+        afterItems: normalizeInventoryItems(b.items),
+        reason: 'order_update_apply',
+      })
+
+      const { rows } = await client.query(
+        `update orders
+         set account_id=$1,
+             order_type=$2,
+             buyer_name=$3,
+             shipping_address=$4,
+             items=$5::jsonb,
+             total_amount=$6,
+             ship_status=$7,
+             tracking_number=$8,
+             tracking_method=$9,
+             is_abnormal=$10,
+             abnormal_type=$11,
+             remark=$12,
+             settlement_status=$13,
+             paid_amount=$14,
+             paid_at=$15,
+             paid_remark=$16,
+             shipped_at=$17
+         where order_id=$18
+         returning *`,
+        [
+          b.account_id,
+          b.order_type,
+          b.buyer_name,
+          b.shipping_address,
+          JSON.stringify(b.items ?? []),
+          b.total_amount ?? 0,
+          b.ship_status ?? 'pending',
+          b.tracking_number ?? null,
+          b.tracking_method ?? null,
+          b.is_abnormal ?? false,
+          b.abnormal_type ?? null,
+          b.remark ?? null,
+          b.settlement_status ?? null,
+          b.paid_amount ?? 0,
+          b.paid_at ?? null,
+          b.paid_remark ?? null,
+          b.shipped_at ?? null,
+          id,
+        ]
+      )
+
+      await client.query('commit')
+      return res.json(rows[0])
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined)
+
+      if (isInventoryLedgerError(error)) {
+        return res.status(error.statusCode).json({ error: error.message })
+      }
+
+      throw error
+    } finally {
+      client.release()
     }
-
-    return res.json(rows[0])
   })
 
   app.patch('/api/orders/:id/paid', requireAuth, async (req, res) => {
-    const { id } = req.params
+    const id = String(req.params.id)
     const b = req.body
     const { rows } = await pool.query(
       `update orders
@@ -463,19 +538,52 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
   })
 
   app.delete('/api/orders/:id', requireAuth, async (req, res) => {
-    const { id } = req.params
-    const { rows } = await pool.query<{ order_id: string }>(
-      `delete from orders
-       where order_id = $1
-       returning order_id`,
-      [id]
-    )
+    const id = String(req.params.id)
+    const client = await pool.connect()
 
-    if (!rows[0]) {
-      return res.status(404).json({ error: 'order not found' })
+    try {
+      await client.query('begin')
+
+      const existingOrder = await client.query<{ order_id: string; items: unknown }>(
+        `select order_id, items
+         from orders
+         where order_id = $1
+         for update`,
+        [id]
+      )
+
+      if (!existingOrder.rows[0]) {
+        await client.query('rollback')
+        return res.status(404).json({ error: 'order not found' })
+      }
+
+      await applyInventoryMovementTx({
+        client,
+        orderId: id,
+        beforeItems: normalizeInventoryItems(existingOrder.rows[0].items),
+        afterItems: [],
+        reason: 'order_delete_revert',
+      })
+
+      await client.query(
+        `delete from orders
+         where order_id = $1`,
+        [id]
+      )
+
+      await client.query('commit')
+      return res.json({ ok: true, deletedOrderId: existingOrder.rows[0].order_id })
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined)
+
+      if (isInventoryLedgerError(error)) {
+        return res.status(error.statusCode).json({ error: error.message })
+      }
+
+      throw error
+    } finally {
+      client.release()
     }
-
-    return res.json({ ok: true, deletedOrderId: rows[0].order_id })
   })
 
   app.post('/api/orders/bulkUpsert', requireAuth, async (req, res) => {
