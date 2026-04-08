@@ -18,6 +18,9 @@ import { removeTrashFilePair } from './productImages/fileStore.js'
 import { createProductImageRouter } from './productImages/routes.js'
 import {
   listSkuAttributeSuggestions,
+  listSkuAttributeSuggestionRecords,
+  updateSkuAttributeSuggestionTx,
+  upsertManualSkuAttributeSuggestionTx,
   upsertSkuAttributeSuggestionsTx,
   type SkuAttributeType,
 } from './skuAttributes/suggestions.js'
@@ -369,6 +372,76 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
     })
 
     return res.json({ suggestions })
+  })
+
+  app.get('/api/settings/sku-attribute-suggestions', requireAuth, async (req, res) => {
+    const rawAttribute = normalizeOptionalText(req.query.attribute)
+    const attribute =
+      rawAttribute === 'category' || rawAttribute === 'color' || rawAttribute === 'variant'
+        ? rawAttribute
+        : null
+    const includeDisabled =
+      String(req.query.include_disabled ?? '').trim().toLowerCase() === 'true'
+
+    const suggestions = await listSkuAttributeSuggestionRecords(pool, {
+      attributeType: attribute,
+      scopeKey: normalizeOptionalText(req.query.scope_key),
+      query: normalizeOptionalText(req.query.query),
+      includeDisabled,
+      limit: Number(req.query.limit ?? 200),
+    })
+
+    return res.json({ suggestions })
+  })
+
+  app.post('/api/settings/sku-attribute-suggestions', requireAuth, async (req, res) => {
+    const attributeType = String(req.body?.attribute_type ?? '').trim() as SkuAttributeType
+    if (!['category', 'color', 'variant'].includes(attributeType)) {
+      return res.status(400).json({ error: 'attribute_type must be one of: category, color, variant' })
+    }
+
+    const client = await pool.connect()
+    try {
+      await client.query('begin')
+      const saved = await upsertManualSkuAttributeSuggestionTx(client, {
+        attributeType,
+        scopeKey: normalizeOptionalText(req.body?.scope_key),
+        value: String(req.body?.value ?? ''),
+        source: normalizeOptionalText(req.body?.source) ?? 'manual_settings',
+      })
+      await client.query('commit')
+      return res.json(saved)
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined)
+      return res.status(400).json({ error: (error as Error).message })
+    } finally {
+      client.release()
+    }
+  })
+
+  app.put('/api/settings/sku-attribute-suggestions/:id', requireAuth, async (req, res) => {
+    const suggestionId = String(req.params.id)
+    const client = await pool.connect()
+    try {
+      await client.query('begin')
+      const saved = await updateSkuAttributeSuggestionTx(client, {
+        suggestionId,
+        isEnabled:
+          typeof req.body?.is_enabled === 'boolean' ? Boolean(req.body.is_enabled) : undefined,
+        value: req.body?.value,
+        scopeKey: req.body?.scope_key,
+        source: req.body?.source,
+      })
+      await client.query('commit')
+      return res.json(saved)
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined)
+      return res.status((error as Error).message === 'suggestion not found' ? 404 : 400).json({
+        error: (error as Error).message,
+      })
+    } finally {
+      client.release()
+    }
   })
 
   app.get('/api/skus', requireAuth, async (_req, res) => {

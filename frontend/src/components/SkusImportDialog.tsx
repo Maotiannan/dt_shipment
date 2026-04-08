@@ -12,7 +12,8 @@ import {
   updateImportPreviewRow,
   type ImportPreviewRow,
 } from '../lib/importPreview'
-import { downloadCsvTemplate, mapSpreadsheetRows, parseSpreadsheetFile } from '../lib/importWorkbook'
+import { SKU_IMPORT_TEMPLATE, downloadImportTemplate } from '../lib/importTemplates'
+import { mapSpreadsheetRows, parseSpreadsheetFile } from '../lib/importWorkbook'
 import ImportPreviewTable from './ImportPreviewTable'
 
 const skuHeaderMap: Record<string, string> = {
@@ -45,11 +46,7 @@ export default function SkusImportDialog({ onImported }: Props) {
   }
 
   function downloadTemplate() {
-    downloadCsvTemplate(
-      '发货管家_SKU导入模板.csv',
-      ['SKU编码', '产品名称', '类目', '颜色', '规格', '单价', '库存', '状态'],
-      [['SKU-001', '示例短袖', '上衣', '白色', 'M', 49.9, 12, 'active']]
-    )
+    downloadImportTemplate(SKU_IMPORT_TEMPLATE)
   }
 
   async function revalidate(nextRows: Array<SkuImportDraft | SkuImportPreviewData>) {
@@ -103,15 +100,21 @@ export default function SkusImportDialog({ onImported }: Props) {
 
   return (
     <>
-      <button
-        className="ghostBtn"
-        onClick={() => {
-          setOpen(true)
-          resetMessages()
-        }}
-      >
-        批量导入 SKU
-      </button>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button className="ghostBtn" type="button" onClick={downloadTemplate}>
+          下载 SKU 模板
+        </button>
+        <button
+          className="ghostBtn"
+          type="button"
+          onClick={() => {
+            setOpen(true)
+            resetMessages()
+          }}
+        >
+          批量导入 SKU
+        </button>
+      </div>
 
       {open ? (
         <div className="modalOverlay" role="dialog" aria-modal="true">
@@ -124,9 +127,6 @@ export default function SkusImportDialog({ onImported }: Props) {
             </div>
 
             <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-              <button className="ghostBtn" onClick={downloadTemplate} disabled={busy}>
-                下载模板
-              </button>
               <label className="ghostBtn" style={{ textAlign: 'center' }}>
                 选择文件
                 <input

@@ -1,6 +1,6 @@
 import './App.css'
 import { useState } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import BottomTabs from './components/BottomTabs'
 import RequireAuth from './components/RequireAuth'
 import TopBar from './components/TopBar'
@@ -11,9 +11,11 @@ import AccountsPage from './pages/AccountsPage'
 import ProductsPage from './pages/ProductsPage'
 import SettlementsPage from './pages/SettlementsPage'
 import LoginPage from './pages/LoginPage'
+import SettingsPage from './pages/SettingsPage'
 
 function App() {
   const location = useLocation()
+  const navigate = useNavigate()
   const showTabs = location.pathname !== '/login'
   const showTopBar = location.pathname !== '/login'
   const [sideCollapsed, setSideCollapsed] = useState(false)
@@ -23,13 +25,24 @@ function App() {
       {showTopBar ? (
         <TopBar
           rightExtra={
-            <button
-              className="ghostBtn ghostBtn-small"
-              type="button"
-              onClick={() => setSideCollapsed((v) => !v)}
-            >
-              {sideCollapsed ? '展开导航' : '收起导航'}
-            </button>
+            <>
+              {location.pathname !== '/settings' ? (
+                <button
+                  className="ghostBtn ghostBtn-small"
+                  type="button"
+                  onClick={() => navigate('/settings')}
+                >
+                  设置
+                </button>
+              ) : null}
+              <button
+                className="ghostBtn ghostBtn-small"
+                type="button"
+                onClick={() => setSideCollapsed((v) => !v)}
+              >
+                {sideCollapsed ? '展开导航' : '收起导航'}
+              </button>
+            </>
           }
         />
       ) : null}
@@ -75,6 +88,14 @@ function App() {
               element={
                 <RequireAuth>
                   <SettlementsPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <RequireAuth>
+                  <SettingsPage />
                 </RequireAuth>
               }
             />

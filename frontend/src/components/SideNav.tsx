@@ -6,6 +6,7 @@ const items = [
   { to: '/accounts', label: '账号' },
   { to: '/products', label: '产品库' },
   { to: '/settlements', label: '结算' },
+  { to: '/settings', label: '设置' },
 ]
 
 export default function SideNav({ collapsed }: { collapsed?: boolean }) {
@@ -31,4 +32,3 @@ export default function SideNav({ collapsed }: { collapsed?: boolean }) {
     </aside>
   )
 }
-

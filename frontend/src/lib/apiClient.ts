@@ -1,6 +1,6 @@
 import { resolveApiBase } from './runtimeConfig'
 
-const API_BASE = resolveApiBase(import.meta.env.VITE_API_BASE as string | undefined)
+const API_BASE = resolveApiBase(import.meta.env?.VITE_API_BASE as string | undefined)
 
 const TOKEN_KEY = 'dt_auth_token'
 

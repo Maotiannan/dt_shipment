@@ -367,6 +367,70 @@ async function main() {
     throw new Error(`category suggestion missing after sku create: ${JSON.stringify(categorySuggestions)}`)
   }
 
+  const settingsSuggestionsBefore = await expectJson(
+    '/api/settings/sku-attribute-suggestions?attribute=color&scope_key=Smoke%20Category',
+    {
+      headers: authHeaders,
+    }
+  )
+  if (
+    !Array.isArray(settingsSuggestionsBefore?.suggestions) ||
+    !settingsSuggestionsBefore.suggestions.some((item) => item.value === 'Smoke White')
+  ) {
+    throw new Error(
+      `settings suggestion list missing seeded color: ${JSON.stringify(settingsSuggestionsBefore)}`
+    )
+  }
+
+  const createdSetting = await expectJson('/api/settings/sku-attribute-suggestions', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      attribute_type: 'category',
+      value: 'Smoke Manual Category',
+    }),
+  })
+  if (createdSetting?.value !== 'Smoke Manual Category' || createdSetting?.attribute_type !== 'category') {
+    throw new Error(`settings create returned unexpected payload: ${JSON.stringify(createdSetting)}`)
+  }
+
+  const toggledSetting = await expectJson(
+    `/api/settings/sku-attribute-suggestions/${createdSetting.suggestion_id}`,
+    {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+        ...authHeaders,
+      },
+      body: JSON.stringify({
+        is_enabled: false,
+      }),
+    }
+  )
+  if (toggledSetting?.is_enabled !== false) {
+    throw new Error(`settings toggle returned unexpected payload: ${JSON.stringify(toggledSetting)}`)
+  }
+
+  const settingsSuggestionsAfter = await expectJson(
+    '/api/settings/sku-attribute-suggestions?attribute=category&include_disabled=true&query=Smoke%20Manual',
+    {
+      headers: authHeaders,
+    }
+  )
+  if (
+    !Array.isArray(settingsSuggestionsAfter?.suggestions) ||
+    !settingsSuggestionsAfter.suggestions.some(
+      (item) => item.suggestion_id === createdSetting.suggestion_id && item.is_enabled === false
+    )
+  ) {
+    throw new Error(
+      `settings suggestion query did not return disabled manual row: ${JSON.stringify(settingsSuggestionsAfter)}`
+    )
+  }
+
   const form = new FormData()
   form.append('files', new Blob([tinyPng], { type: 'image/png' }), 'cover.png')
   form.append('files', new Blob([tinyPng], { type: 'image/png' }), 'detail.png')

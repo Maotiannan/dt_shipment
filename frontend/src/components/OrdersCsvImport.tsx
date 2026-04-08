@@ -12,7 +12,8 @@ import {
   updateImportPreviewRow,
   type ImportPreviewRow,
 } from '../lib/importPreview'
-import { downloadCsvTemplate, mapSpreadsheetRows, parseSpreadsheetFile } from '../lib/importWorkbook'
+import { ORDER_IMPORT_TEMPLATE, downloadImportTemplate } from '../lib/importTemplates'
+import { mapSpreadsheetRows, parseSpreadsheetFile } from '../lib/importWorkbook'
 import ImportPreviewTable from './ImportPreviewTable'
 
 const headerMap: Record<string, string> = {
@@ -45,11 +46,7 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
   }
 
   function downloadTemplate() {
-    downloadCsvTemplate(
-      '发货管家_订单导入模板.csv',
-      ['订单号', '订单类型', '账号名称', '买家昵称', '收货地址', 'SKU编码', 'SKU名称', '数量', '单价', '是否异常', '异常类型', '异常备注'],
-      [['10001', 'wholesale', '女装专号', '张三', '广东省广州市天河区xx路xx号', 'SKU-001', '连衣裙', 2, 59.9, 'false', '', '']]
-    )
+    downloadImportTemplate(ORDER_IMPORT_TEMPLATE)
   }
 
   async function revalidate(nextRows: OrderImportDraft[]) {
@@ -91,16 +88,21 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
 
   return (
     <>
-      <button
-        className="ghostBtn"
-        onClick={() => {
-          setOpen(true)
-          resetMessages()
-        }}
-        style={{ width: '100%' }}
-      >
-        导入订单（CSV / Excel）
-      </button>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button className="ghostBtn" type="button" onClick={downloadTemplate}>
+          下载订单模板
+        </button>
+        <button
+          className="ghostBtn"
+          type="button"
+          onClick={() => {
+            setOpen(true)
+            resetMessages()
+          }}
+        >
+          导入订单（CSV / Excel）
+        </button>
+      </div>
 
       {open ? (
         <div className="modalOverlay" role="dialog" aria-modal="true">
@@ -113,9 +115,6 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
             </div>
 
             <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-              <button className="ghostBtn" onClick={downloadTemplate} disabled={busy}>
-                下载模板
-              </button>
               <label className="ghostBtn" style={{ textAlign: 'center' }}>
                 选择文件
                 <input

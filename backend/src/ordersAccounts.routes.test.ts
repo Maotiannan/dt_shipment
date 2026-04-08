@@ -662,6 +662,97 @@ dbTest(
 )
 
 dbTest(
+  'settings routes list, create, and toggle sku attribute suggestions',
+  { concurrency: false },
+  async (t) => {
+    const runningDb = await getSharedRunningDatabase()
+    const { port, token } = await startTestApp(t)
+
+    const createSkuRes = await postJson(port, '/api/skus', token, {
+      sku_code: `SKU-SETTINGS-${Date.now()}`,
+      name: 'Settings Tee',
+      category_name: '上衣',
+      color_name: '米白',
+      variant_name: 'L',
+      unit_price: 69,
+      inventory_quantity: 4,
+      status: 'active',
+    })
+    assert.equal(createSkuRes.response.status, 200, createSkuRes.text)
+
+    const listRes = await fetch(
+      `http://127.0.0.1:${port}/api/settings/sku-attribute-suggestions?attribute=color&scope_key=${encodeURIComponent('上衣')}`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+      }
+    )
+    const listBody = await listRes.text()
+    assert.equal(listRes.status, 200, listBody)
+    const listed = JSON.parse(listBody) as {
+      suggestions: Array<{
+        suggestion_id: string
+        value: string
+        is_enabled: boolean
+      }>
+    }
+    const seeded = listed.suggestions.find((item) => item.value === '米白')
+    assert.ok(seeded?.suggestion_id)
+    assert.equal(seeded?.is_enabled, true)
+
+    const createManualRes = await postJson(port, '/api/settings/sku-attribute-suggestions', token, {
+      attribute_type: 'category',
+      scope_key: null,
+      value: '裤装',
+      source: 'manual_settings',
+    })
+    assert.equal(createManualRes.response.status, 200, createManualRes.text)
+    const createdManual = JSON.parse(createManualRes.text) as {
+      suggestion_id: string
+      value: string
+      is_enabled: boolean
+    }
+    assert.equal(createdManual.value, '裤装')
+    assert.equal(createdManual.is_enabled, true)
+
+    const disableRes = await fetch(
+      `http://127.0.0.1:${port}/api/settings/sku-attribute-suggestions/${seeded?.suggestion_id}`,
+      {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ is_enabled: false }),
+      }
+    )
+    const disableBody = await disableRes.text()
+    assert.equal(disableRes.status, 200, disableBody)
+    const disabled = JSON.parse(disableBody) as { is_enabled: boolean }
+    assert.equal(disabled.is_enabled, false)
+
+    const listDisabledRes = await fetch(
+      `http://127.0.0.1:${port}/api/settings/sku-attribute-suggestions?attribute=color&scope_key=${encodeURIComponent('上衣')}&include_disabled=true`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+      }
+    )
+    const listDisabledBody = await listDisabledRes.text()
+    assert.equal(listDisabledRes.status, 200, listDisabledBody)
+    const disabledList = JSON.parse(listDisabledBody) as {
+      suggestions: Array<{ suggestion_id: string; is_enabled: boolean }>
+    }
+    assert.equal(
+      disabledList.suggestions.some(
+        (item) => item.suggestion_id === seeded?.suggestion_id && item.is_enabled === false
+      ),
+      true
+    )
+
+    void runningDb
+  }
+)
+
+dbTest(
   'account deletion blocks referenced accounts and removes safe accounts',
   { concurrency: false },
   async (t) => {

@@ -4,7 +4,7 @@
 
 ## 当前部署结论
 
-- 当前版本: `1.3.0`
+- 当前版本: `1.4.0`
 - 前端容器: `dt-shipment-frontend`
 - 后端容器: `dt-shipment-backend`
 - 数据库容器: `dt-shipment-db`
@@ -185,6 +185,9 @@ npm run test:smoke
 - `DELETE /api/orders/:id`
 - `POST /api/skus`
 - `GET /api/sku-attribute-suggestions`
+- `GET /api/settings/sku-attribute-suggestions`
+- `POST /api/settings/sku-attribute-suggestions`
+- `PUT /api/settings/sku-attribute-suggestions/:id`
 - `POST /api/skus/:id/images`
 - `PATCH /api/skus/:id/images/reorder`
 - `PATCH /api/skus/:id/images/:imageId/primary`
@@ -246,6 +249,9 @@ npm run dev
 | `POST /api/skus/import/preview` | SKU 批量导入预检 |
 | `POST /api/skus/import/commit` | SKU 批量导入确认落库 |
 | `GET /api/sku-attribute-suggestions` | SKU 类目/颜色/规格候选项 |
+| `GET /api/settings/sku-attribute-suggestions` | 设置中心读取 SKU 候选项治理列表 |
+| `POST /api/settings/sku-attribute-suggestions` | 设置中心新增候选项 |
+| `PUT /api/settings/sku-attribute-suggestions/:id` | 设置中心编辑或启停候选项 |
 | `DELETE /api/skus/:id` | 删除 SKU，并清理关联图片文件 |
 | `POST /api/skus/:id/images` | 上传商品图片 |
 | `GET /api/product-images/:imageId/thumb` | 鉴权读取缩略图 |
@@ -267,10 +273,12 @@ npm run dev
 
 - 账号管理：支持新增、列表查询、编辑、停用、删除；若账号已被订单引用会阻止删除
 - 产品库：支持新增、列表查询、编辑、停用、删除；SKU 结构化为类目/颜色/规格，支持库存维护、候选项沉淀和同流程上传商品图片
-- 产品库：支持新增、列表查询、编辑、停用、删除；支持 `CSV / XLSX / XLS` 批量导入 SKU，并在导入前显示总览、错误项和覆盖项
+- 产品库：支持新增、列表查询、编辑、停用、删除；支持 `CSV / XLSX / XLS` 批量导入 SKU，并在产品页直接下载导入模板
+- 订单管理：支持 `CSV / XLSX / XLS` 导入预检、覆盖导入与 Excel 导出，并在订单页直接下载导入模板
 - 订单管理：支持新增、列表查询、按订单号读取详情、完整编辑、删除、`CSV / XLSX / XLS` 导入预检、覆盖导入与 Excel 导出
 - 结算管理：展示所有仍有应收金额的订单，不再只限批发订单
 - 结算管理：定位为订单结算子视图，负责批发订单收款更新与欠款汇总，不单独承担订单新增/删除
+- 设置中心：第一版已上线，当前用于治理 SKU 类目/颜色/规格候选项，支持新增、查询、编辑和启停
 
 ## 相关运维文件
 
@@ -292,4 +300,5 @@ npm run dev
 - 新增 NAS 自动备份链路
 - 新增商品图片 NAS 私有文件仓、缩略图和回收站清理链路
 - 新增 API 冒烟脚本
+- 新增设置中心第一版与 SKU 候选项治理接口
 - 宿主机统一启动脚本已接入本项目
