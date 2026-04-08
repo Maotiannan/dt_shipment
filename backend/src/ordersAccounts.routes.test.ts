@@ -235,6 +235,24 @@ async function readInventoryMovements(pool: Pool, orderId: string) {
     )
 }
 
+async function readManualInventoryMovements(pool: Pool, skuId: string) {
+  const { rows } = await pool.query<{
+    delta_quantity: number
+    reason: string
+  }>(
+    `select delta_quantity, reason
+     from inventory_movements
+     where sku_id = $1
+     order by created_at asc, movement_id asc`,
+    [skuId]
+  )
+
+  return rows.map((row) => ({
+    delta_quantity: Number(row.delta_quantity),
+    reason: row.reason,
+  }))
+}
+
 test.after(async () => {
   await appModulePool?.end().catch(() => undefined)
 
@@ -250,6 +268,117 @@ test.after(async () => {
     }
   }
 })
+
+dbTest(
+  'sku routes persist structured attributes, seed suggestions, and record manual inventory adjustments',
+  { concurrency: false },
+  async (t) => {
+    const runningDb = await getSharedRunningDatabase()
+    const { port, token } = await startTestApp(t)
+
+    const createSkuRes = await postJson(port, '/api/skus', token, {
+      sku_code: `SKU-STRUCTURED-${Date.now()}`,
+      name: 'Structured Tee',
+      category_name: '上衣',
+      color_name: '白色',
+      variant_name: 'XL',
+      unit_price: 99,
+      inventory_quantity: 12,
+      status: 'active',
+    })
+    assert.equal(createSkuRes.response.status, 200, createSkuRes.text)
+    const createdSku = JSON.parse(createSkuRes.text) as {
+      sku_id: string
+      category_name: string | null
+      color_name: string | null
+      variant_name: string | null
+      inventory_quantity: number
+    }
+    assert.equal(createdSku.category_name, '上衣')
+    assert.equal(createdSku.color_name, '白色')
+    assert.equal(createdSku.variant_name, 'XL')
+    assert.equal(Number(createdSku.inventory_quantity), 12)
+
+    const getCreatedSkuRes = await fetch(`http://127.0.0.1:${port}/api/skus/${createdSku.sku_id}`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    const getCreatedSkuBody = await getCreatedSkuRes.text()
+    assert.equal(getCreatedSkuRes.status, 200, getCreatedSkuBody)
+    const createdSkuDetail = JSON.parse(getCreatedSkuBody) as {
+      category_name: string | null
+      color_name: string | null
+      variant_name: string | null
+      inventory_quantity: number
+    }
+    assert.equal(createdSkuDetail.category_name, '上衣')
+    assert.equal(createdSkuDetail.color_name, '白色')
+    assert.equal(createdSkuDetail.variant_name, 'XL')
+    assert.equal(Number(createdSkuDetail.inventory_quantity), 12)
+
+    const updateSkuRes = await putJson(port, `/api/skus/${createdSku.sku_id}`, token, {
+      sku_code: `SKU-STRUCTURED-${Date.now()}-2`,
+      name: 'Structured Tee Updated',
+      category_name: '上衣',
+      color_name: '黑色',
+      variant_name: '2XL',
+      unit_price: 109,
+      inventory_quantity: 7,
+      status: 'active',
+      inventory_id: null,
+    })
+    assert.equal(updateSkuRes.response.status, 200, updateSkuRes.text)
+    const updatedSku = JSON.parse(updateSkuRes.text) as {
+      category_name: string | null
+      color_name: string | null
+      variant_name: string | null
+      inventory_quantity: number
+    }
+    assert.equal(updatedSku.category_name, '上衣')
+    assert.equal(updatedSku.color_name, '黑色')
+    assert.equal(updatedSku.variant_name, '2XL')
+    assert.equal(Number(updatedSku.inventory_quantity), 7)
+
+    assert.deepEqual(await readManualInventoryMovements(runningDb.pool, createdSku.sku_id), [
+      { delta_quantity: 12, reason: 'manual_adjustment' },
+      { delta_quantity: -5, reason: 'manual_adjustment' },
+    ])
+
+    const categorySuggestionsRes = await fetch(
+      `http://127.0.0.1:${port}/api/sku-attribute-suggestions?attribute=category`,
+      { headers: { authorization: `Bearer ${token}` } }
+    )
+    const categorySuggestionsBody = await categorySuggestionsRes.text()
+    assert.equal(categorySuggestionsRes.status, 200, categorySuggestionsBody)
+    const categorySuggestions = JSON.parse(categorySuggestionsBody) as {
+      suggestions: Array<{ value: string; usage_count: number }>
+    }
+    assert.equal(categorySuggestions.suggestions.some((item) => item.value === '上衣'), true)
+
+    const colorSuggestionsRes = await fetch(
+      `http://127.0.0.1:${port}/api/sku-attribute-suggestions?attribute=color&category_name=${encodeURIComponent('上衣')}`,
+      { headers: { authorization: `Bearer ${token}` } }
+    )
+    const colorSuggestionsBody = await colorSuggestionsRes.text()
+    assert.equal(colorSuggestionsRes.status, 200, colorSuggestionsBody)
+    const colorSuggestions = JSON.parse(colorSuggestionsBody) as {
+      suggestions: Array<{ value: string }>
+    }
+    assert.equal(colorSuggestions.suggestions.some((item) => item.value === '白色'), true)
+    assert.equal(colorSuggestions.suggestions.some((item) => item.value === '黑色'), true)
+
+    const variantSuggestionsRes = await fetch(
+      `http://127.0.0.1:${port}/api/sku-attribute-suggestions?attribute=variant&category_name=${encodeURIComponent('上衣')}`,
+      { headers: { authorization: `Bearer ${token}` } }
+    )
+    const variantSuggestionsBody = await variantSuggestionsRes.text()
+    assert.equal(variantSuggestionsRes.status, 200, variantSuggestionsBody)
+    const variantSuggestions = JSON.parse(variantSuggestionsBody) as {
+      suggestions: Array<{ value: string }>
+    }
+    assert.equal(variantSuggestions.suggestions.some((item) => item.value === 'XL'), true)
+    assert.equal(variantSuggestions.suggestions.some((item) => item.value === '2XL'), true)
+  }
+)
 
 dbTest(
   'account deletion blocks referenced accounts and removes safe accounts',

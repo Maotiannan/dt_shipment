@@ -77,6 +77,15 @@ function ensureValidQuantity(value: unknown, skuId: string) {
   return quantity
 }
 
+function ensureNonNegativeInteger(value: unknown, label: string) {
+  const quantity = toFiniteNumber(value)
+  if (quantity === null || !Number.isInteger(quantity) || quantity < 0) {
+    throw new InventoryLedgerError(`${label} must be a non-negative integer`, 400)
+  }
+
+  return quantity
+}
+
 export function normalizeInventoryItems(items: unknown): InventoryLine[] {
   if (items == null) {
     return []
@@ -227,4 +236,41 @@ export async function lockInventoryStateForOrderChangeTx(
   afterItems: InventoryLine[]
 ) {
   return lockInventoryStateTx(client, collectInventoryLockSkuIds(beforeItems, afterItems))
+}
+
+export async function setSkuInventoryQuantityTx(params: {
+  client: InventoryQueryClient
+  skuId: string
+  nextQuantity: unknown
+  reason?: InventoryMovementReason
+  remark?: string | null
+}) {
+  const skuId = ensureValidSkuId(params.skuId)
+  const nextQuantity = ensureNonNegativeInteger(params.nextQuantity, 'inventory_quantity')
+  const inventoryState = await lockInventoryStateTx(params.client, [skuId])
+  const currentQuantity = inventoryState.get(skuId)
+
+  if (typeof currentQuantity !== 'number') {
+    throw new InventoryLedgerError(`sku not found: ${skuId}`, 404)
+  }
+
+  const delta = nextQuantity - currentQuantity
+  if (delta === 0) {
+    return nextQuantity
+  }
+
+  await params.client.query(
+    `insert into inventory_movements(sku_id, order_id, delta_quantity, reason, remark)
+     values ($1, null, $2, $3, $4)`,
+    [skuId, delta, params.reason ?? 'manual_adjustment', params.remark ?? null]
+  )
+
+  await params.client.query(
+    `update skus
+     set inventory_quantity = $1
+     where sku_id = $2`,
+    [nextQuantity, skuId]
+  )
+
+  return nextQuantity
 }

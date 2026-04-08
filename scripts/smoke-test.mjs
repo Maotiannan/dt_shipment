@@ -306,15 +306,30 @@ async function main() {
     body: JSON.stringify({
       sku_code: `SMOKE-${Date.now()}`,
       name: 'Smoke image product',
-      spec: 'smoke image lifecycle',
+      category_name: 'Smoke Category',
+      color_name: 'Smoke White',
+      variant_name: 'Smoke XL',
       unit_price: 1,
-      category: 'smoke',
+      inventory_quantity: 9,
       status: 'active',
     }),
   })
 
-  if (!sku?.sku_id) {
+  if (
+    !sku?.sku_id ||
+    sku.category_name !== 'Smoke Category' ||
+    sku.color_name !== 'Smoke White' ||
+    sku.variant_name !== 'Smoke XL' ||
+    Number(sku.inventory_quantity) !== 9
+  ) {
     throw new Error(`/api/skus did not return sku_id: ${JSON.stringify(sku)}`)
+  }
+
+  const categorySuggestions = await expectJson('/api/sku-attribute-suggestions?attribute=category', {
+    headers: authHeaders,
+  })
+  if (!Array.isArray(categorySuggestions?.suggestions) || !categorySuggestions.suggestions.some((item) => item.value === 'Smoke Category')) {
+    throw new Error(`category suggestion missing after sku create: ${JSON.stringify(categorySuggestions)}`)
   }
 
   const form = new FormData()

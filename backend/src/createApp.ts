@@ -9,12 +9,18 @@ import {
   lockInventoryStateForOrderChangeTx,
   InventoryLedgerError,
   normalizeInventoryItems,
+  setSkuInventoryQuantityTx,
 } from './inventory/ledger.js'
 import { requireAuth, signToken, type AuthPayload } from './auth.js'
 import { loadProductImageConfig } from './productImages/config.js'
 import { productImageRepository, type ProductImageRow } from './productImages/repository.js'
 import { removeTrashFilePair } from './productImages/fileStore.js'
 import { createProductImageRouter } from './productImages/routes.js'
+import {
+  listSkuAttributeSuggestions,
+  upsertSkuAttributeSuggestionsTx,
+  type SkuAttributeType,
+} from './skuAttributes/suggestions.js'
 
 function toProductImageSummary(row: ProductImageRow) {
   return {
@@ -56,6 +62,174 @@ function isInventoryLedgerError(error: unknown): error is InventoryLedgerError {
   return error instanceof InventoryLedgerError
 }
 
+const SKU_SELECT_SQL = `select sku_id,
+  sku_code,
+  name,
+  spec,
+  unit_price,
+  category,
+  category_name,
+  color_name,
+  variant_name,
+  status,
+  created_at,
+  inventory_id,
+  inventory_quantity
+ from skus`
+
+type SkuRow = Record<string, unknown> & {
+  sku_id: string
+  sku_code?: string | null
+  name: string
+  spec?: string | null
+  unit_price?: number | string | null
+  category?: string | null
+  category_name?: string | null
+  color_name?: string | null
+  variant_name?: string | null
+  status?: string | null
+  created_at: string
+  inventory_id?: string | null
+  inventory_quantity?: number | null
+}
+
+type OrderRow = Record<string, unknown> & {
+  ship_status?: string | null
+  delivery_channel?: string | null
+  tracking_method?: string | null
+}
+
+function normalizeShipStatus(shipStatus: unknown) {
+  if (shipStatus === 'shipped_private' || shipStatus === 'shipped_uploaded') {
+    return 'shipped'
+  }
+
+  return shipStatus === 'shipped' ? 'shipped' : 'pending'
+}
+
+function normalizeDeliveryChannel(row: {
+  ship_status?: unknown
+  delivery_channel?: unknown
+  tracking_method?: unknown
+}) {
+  const shipStatus = row.ship_status
+  if (shipStatus === 'shipped_private') {
+    return 'private_chat'
+  }
+  if (shipStatus === 'shipped_uploaded') {
+    return 'platform_upload'
+  }
+
+  const channel =
+    row.delivery_channel === 'private_chat' || row.delivery_channel === 'platform_upload'
+      ? row.delivery_channel
+      : row.tracking_method === 'private_chat' || row.tracking_method === 'platform_upload'
+        ? row.tracking_method
+        : null
+
+  return normalizeShipStatus(shipStatus) === 'shipped' ? channel : null
+}
+
+function toOrderResponseRow(row: OrderRow) {
+  const deliveryChannel = normalizeDeliveryChannel(row)
+  return {
+    ...row,
+    ship_status: normalizeShipStatus(row.ship_status),
+    delivery_channel: deliveryChannel,
+    tracking_method: deliveryChannel,
+  }
+}
+
+function hasOwnKey<T extends string>(value: Record<string, unknown>, key: T) {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function normalizeOptionalText(value: unknown) {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const normalized = value.trim()
+  return normalized ? normalized : null
+}
+
+function parseNonNegativeInteger(value: unknown, fallback = 0) {
+  if (value == null || value === '') {
+    return fallback
+  }
+
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new InventoryLedgerError('inventory_quantity must be a non-negative integer', 400)
+  }
+
+  return parsed
+}
+
+function coerceCategoryName(body: Record<string, unknown>, existing?: SkuRow | null) {
+  if (hasOwnKey(body, 'category_name')) {
+    return normalizeOptionalText(body.category_name)
+  }
+  if (hasOwnKey(body, 'category')) {
+    return normalizeOptionalText(body.category)
+  }
+  return normalizeOptionalText(existing?.category_name) ?? normalizeOptionalText(existing?.category)
+}
+
+function coerceVariantName(body: Record<string, unknown>, existing?: SkuRow | null) {
+  if (hasOwnKey(body, 'variant_name')) {
+    return normalizeOptionalText(body.variant_name)
+  }
+  if (hasOwnKey(body, 'spec')) {
+    return normalizeOptionalText(body.spec)
+  }
+  return normalizeOptionalText(existing?.variant_name) ?? normalizeOptionalText(existing?.spec)
+}
+
+function coerceColorName(body: Record<string, unknown>, existing?: SkuRow | null) {
+  if (hasOwnKey(body, 'color_name')) {
+    return normalizeOptionalText(body.color_name)
+  }
+  return normalizeOptionalText(existing?.color_name)
+}
+
+function getSkuWriteFields(body: Record<string, unknown>, existing?: SkuRow | null) {
+  const categoryName = coerceCategoryName(body, existing)
+  const colorName = coerceColorName(body, existing)
+  const variantName = coerceVariantName(body, existing)
+
+  return {
+    skuCode: normalizeOptionalText(body.sku_code) ?? normalizeOptionalText(existing?.sku_code),
+    name: String(body.name ?? existing?.name ?? '').trim(),
+    unitPrice: Number(body.unit_price ?? existing?.unit_price ?? 0),
+    categoryName,
+    colorName,
+    variantName,
+    spec: variantName,
+    category: categoryName,
+    status: String(body.status ?? existing?.status ?? 'active'),
+    inventoryId: normalizeOptionalText(body.inventory_id) ?? normalizeOptionalText(existing?.inventory_id),
+    inventoryQuantity: hasOwnKey(body, 'inventory_quantity')
+      ? parseNonNegativeInteger(body.inventory_quantity)
+      : parseNonNegativeInteger(existing?.inventory_quantity ?? 0),
+  }
+}
+
+function toSkuResponseRow(row: SkuRow) {
+  const categoryName = normalizeOptionalText(row.category_name) ?? normalizeOptionalText(row.category)
+  const variantName = normalizeOptionalText(row.variant_name) ?? normalizeOptionalText(row.spec)
+  const colorName = normalizeOptionalText(row.color_name)
+
+  return {
+    ...row,
+    category_name: categoryName,
+    color_name: colorName,
+    variant_name: variantName,
+    category: categoryName,
+    spec: variantName,
+    inventory_quantity: Number(row.inventory_quantity ?? 0),
+  }
+}
 export function createApp(env: NodeJS.ProcessEnv = process.env) {
   loadProductImageConfig(env)
 
@@ -179,84 +353,215 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
     }
   })
 
+  app.get('/api/sku-attribute-suggestions', requireAuth, async (req, res) => {
+    const attribute = String(req.query.attribute ?? '').trim() as SkuAttributeType
+    if (!['category', 'color', 'variant'].includes(attribute)) {
+      return res.status(400).json({ error: 'attribute must be one of: category, color, variant' })
+    }
+
+    const categoryName = normalizeOptionalText(req.query.category_name)
+    const suggestions = await listSkuAttributeSuggestions(pool, {
+      attributeType: attribute,
+      scopeKey: attribute === 'category' ? null : categoryName,
+      limit: Number(req.query.limit ?? 12),
+    })
+
+    return res.json({ suggestions })
+  })
+
   app.get('/api/skus', requireAuth, async (_req, res) => {
     const { rows } = await pool.query(
-      `select sku_id,sku_code,name,spec,unit_price,category,status,created_at,inventory_id,inventory_quantity
-       from skus order by created_at desc`
+      `${SKU_SELECT_SQL}
+       order by created_at desc`
     )
     const primaryThumbs = await listPrimaryImageThumbUrlsForSkus(
       rows.map((row) => String(row.sku_id))
     )
     res.json(
       rows.map((row) => ({
-        ...row,
+        ...toSkuResponseRow(row as SkuRow),
         primary_image_thumb_url: primaryThumbs.get(String(row.sku_id)) ?? null,
       }))
     )
   })
 
   app.post('/api/skus', requireAuth, async (req, res) => {
-    const { sku_code, name, spec, unit_price, category, status, inventory_id } =
-      req.body
-    const { rows } = await pool.query(
-      `insert into skus(sku_code,name,spec,unit_price,category,status,inventory_id)
-       values ($1,$2,$3,$4,$5,$6,$7)
-       returning sku_id,sku_code,name,spec,unit_price,category,status,created_at,inventory_id,inventory_quantity`,
-      [
-        sku_code ?? null,
-        name,
-        spec ?? null,
-        unit_price ?? 0,
-        category ?? null,
-        status ?? 'active',
-        inventory_id ?? null,
-      ]
-    )
-    res.json(rows[0])
+    const body = req.body as Record<string, unknown>
+    const fields = getSkuWriteFields(body)
+    const client = await pool.connect()
+
+    try {
+      await client.query('begin')
+      const inserted = await client.query<SkuRow>(
+        `insert into skus(
+          sku_code,
+          name,
+          spec,
+          unit_price,
+          category,
+          category_name,
+          color_name,
+          variant_name,
+          status,
+          inventory_id,
+          inventory_quantity
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0)
+         returning *`,
+        [
+          fields.skuCode,
+          fields.name,
+          fields.spec,
+          fields.unitPrice,
+          fields.category,
+          fields.categoryName,
+          fields.colorName,
+          fields.variantName,
+          fields.status,
+          fields.inventoryId,
+        ]
+      )
+
+      const sku = inserted.rows[0]
+      if (!sku) {
+        throw new Error('failed to create sku')
+      }
+
+      await setSkuInventoryQuantityTx({
+        client,
+        skuId: sku.sku_id,
+        nextQuantity: fields.inventoryQuantity,
+        reason: 'manual_adjustment',
+        remark: 'sku_create',
+      })
+
+      await upsertSkuAttributeSuggestionsTx(client, {
+        categoryName: fields.categoryName,
+        colorName: fields.colorName,
+        variantName: fields.variantName,
+      })
+
+      const finalRow = await client.query<SkuRow>(
+        `${SKU_SELECT_SQL}
+         where sku_id = $1
+         limit 1`,
+        [sku.sku_id]
+      )
+
+      await client.query('commit')
+      return res.json(toSkuResponseRow(finalRow.rows[0] ?? sku))
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined)
+      if (isInventoryLedgerError(error)) {
+        return res.status(error.statusCode).json({ error: error.message })
+      }
+      throw error
+    } finally {
+      client.release()
+    }
   })
 
   app.put('/api/skus/:id', requireAuth, async (req, res) => {
-    const { id } = req.params
-    const { sku_code, name, spec, unit_price, category, status, inventory_id } =
-      req.body
-    const { rows } = await pool.query(
-      `update skus
-       set sku_code=$1,name=$2,spec=$3,unit_price=$4,category=$5,status=$6,inventory_id=$7
-       where sku_id=$8
-       returning sku_id,sku_code,name,spec,unit_price,category,status,created_at,inventory_id,inventory_quantity`,
-      [
-        sku_code ?? null,
-        name,
-        spec ?? null,
-        unit_price ?? 0,
-        category ?? null,
-        status,
-        inventory_id ?? null,
-        id,
-      ]
-    )
-    res.json(rows[0] ?? null)
+    const id = String(req.params.id)
+    const body = req.body as Record<string, unknown>
+    const client = await pool.connect()
+
+    try {
+      await client.query('begin')
+      const existing = await client.query<SkuRow>(
+        `${SKU_SELECT_SQL}
+         where sku_id = $1
+         limit 1
+         for update`,
+        [id]
+      )
+
+      const currentSku = existing.rows[0]
+      if (!currentSku) {
+        await client.query('rollback')
+        return res.status(404).json({ error: 'sku not found' })
+      }
+
+      const fields = getSkuWriteFields(body, currentSku)
+      await client.query(
+        `update skus
+         set sku_code=$1,
+             name=$2,
+             spec=$3,
+             unit_price=$4,
+             category=$5,
+             category_name=$6,
+             color_name=$7,
+             variant_name=$8,
+             status=$9,
+             inventory_id=$10
+         where sku_id=$11`,
+        [
+          fields.skuCode,
+          fields.name,
+          fields.spec,
+          fields.unitPrice,
+          fields.category,
+          fields.categoryName,
+          fields.colorName,
+          fields.variantName,
+          fields.status,
+          fields.inventoryId,
+          id,
+        ]
+      )
+
+      await setSkuInventoryQuantityTx({
+        client,
+        skuId: id,
+        nextQuantity: fields.inventoryQuantity,
+        reason: 'manual_adjustment',
+        remark: 'sku_update',
+      })
+
+      await upsertSkuAttributeSuggestionsTx(client, {
+        categoryName: fields.categoryName,
+        colorName: fields.colorName,
+        variantName: fields.variantName,
+      })
+
+      const finalRow = await client.query<SkuRow>(
+        `${SKU_SELECT_SQL}
+         where sku_id = $1
+         limit 1`,
+        [id]
+      )
+
+      await client.query('commit')
+      return res.json(toSkuResponseRow(finalRow.rows[0] ?? currentSku))
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined)
+      if (isInventoryLedgerError(error)) {
+        return res.status(error.statusCode).json({ error: error.message })
+      }
+      throw error
+    } finally {
+      client.release()
+    }
   })
 
   app.get('/api/skus/:id', requireAuth, async (req, res) => {
     const { id } = req.params
     const skuId = String(id)
     const { rows } = await pool.query(
-      `select sku_id,sku_code,name,spec,unit_price,category,status,created_at,inventory_id,inventory_quantity
-       from skus
+      `${SKU_SELECT_SQL}
        where sku_id = $1
        limit 1`,
       [skuId]
     )
 
-    const sku = rows[0]
+    const sku = rows[0] as SkuRow | undefined
     if (!sku) {
       return res.status(404).json({ error: 'sku not found' })
     }
 
     const images = await productImageRepository.listActiveProductImages(skuId)
     return res.json({
-      ...sku,
+      ...toSkuResponseRow(sku),
       images: images.map((image) => toProductImageSummary(image)),
     })
   })

@@ -9,6 +9,9 @@ test('loads product image config from env-like input', () => {
     PRODUCT_IMAGE_MAX_FILES: '12',
     PRODUCT_IMAGE_MAX_FILE_MB: '10',
     PRODUCT_IMAGE_ALLOWED_MIME: 'image/jpeg,image/png,image/webp',
+    PRODUCT_IMAGE_ORIGINAL_MAX_WIDTH: '1800',
+    PRODUCT_IMAGE_ORIGINAL_JPEG_QUALITY: '82',
+    PRODUCT_IMAGE_ORIGINAL_WEBP_QUALITY: '84',
     PRODUCT_IMAGE_THUMB_WIDTH: '480',
     PRODUCT_IMAGE_TRASH_RETENTION_DAYS: '30',
   })
@@ -18,6 +21,9 @@ test('loads product image config from env-like input', () => {
   assert.equal(config.maxFiles, 12)
   assert.equal(config.maxFileBytes, 10 * 1024 * 1024)
   assert.deepEqual(config.allowedMimeTypes, ['image/jpeg', 'image/png', 'image/webp'])
+  assert.equal(config.originalMaxWidth, 1800)
+  assert.equal(config.originalJpegQuality, 82)
+  assert.equal(config.originalWebpQuality, 84)
   assert.equal(config.thumbWidth, 480)
   assert.equal(config.trashRetentionDays, 30)
 })
@@ -30,6 +36,9 @@ test('loads product image config defaults when env is empty', () => {
   assert.equal(config.maxFiles, 12)
   assert.equal(config.maxFileBytes, 10 * 1024 * 1024)
   assert.deepEqual(config.allowedMimeTypes, ['image/jpeg', 'image/png', 'image/webp'])
+  assert.equal(config.originalMaxWidth, 1800)
+  assert.equal(config.originalJpegQuality, 82)
+  assert.equal(config.originalWebpQuality, 84)
   assert.equal(config.thumbWidth, 480)
   assert.equal(config.trashRetentionDays, 30)
 })
@@ -41,6 +50,14 @@ test('rejects invalid numeric product image env values', () => {
         PRODUCT_IMAGE_MAX_FILES: 'abc',
       }),
     /PRODUCT_IMAGE_MAX_FILES/
+  )
+
+  assert.throws(
+    () =>
+      loadProductImageConfig({
+        PRODUCT_IMAGE_ORIGINAL_MAX_WIDTH: '0',
+      }),
+    /PRODUCT_IMAGE_ORIGINAL_MAX_WIDTH/
   )
 })
 

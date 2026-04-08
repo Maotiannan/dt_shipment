@@ -10,6 +10,7 @@ export type PersistedProductImageFile = {
   thumbRelpath: string
   originalAbsPath: string
   thumbAbsPath: string
+  mimeType: string
   fileExt: string
   fileSize: number
   width: number
@@ -41,6 +42,20 @@ function fileExtensionFromMime(mimeType: string) {
   return '.jpg'
 }
 
+function outputFormatForMetadata(metadata: sharp.Metadata) {
+  if (metadata.hasAlpha) {
+    return {
+      mimeType: 'image/webp',
+      fileExt: '.webp',
+    } as const
+  }
+
+  return {
+    mimeType: 'image/jpeg',
+    fileExt: '.jpg',
+  } as const
+}
+
 function resolveWithinRoot(rootDir: string, relpath: string) {
   const absolutePath = path.resolve(rootDir, relpath)
   const normalizedRoot = `${path.resolve(rootDir)}${path.sep}`
@@ -61,18 +76,35 @@ export async function persistProductImage(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<PersistedProductImageFile> {
   const config = loadProductImageConfig(env)
-  const ext = path.extname(params.originalFilename).toLowerCase() || fileExtensionFromMime(params.mimeType)
-  const originalRelpath = path.posix.join('original', params.skuId, `${params.imageId}${ext}`)
-  const thumbRelpath = path.posix.join('thumb', params.skuId, `${params.imageId}.jpg`)
-  const originalAbsPath = resolveWithinRoot(config.rootDir, originalRelpath)
-  const thumbAbsPath = resolveWithinRoot(config.rootDir, thumbRelpath)
   const fileBuffer = await productImageFileIo.readFile(params.sourcePath)
   let metadata: sharp.Metadata
+  let optimizedOriginalBuffer: Buffer
   let thumbBuffer: Buffer
+  let mimeType = params.mimeType
+  let fileExt = path.extname(params.originalFilename).toLowerCase() || fileExtensionFromMime(params.mimeType)
 
   try {
-    metadata = await sharp(fileBuffer).metadata()
-    thumbBuffer = await sharp(fileBuffer)
+    const image = sharp(fileBuffer).rotate()
+    metadata = await image.metadata()
+    const format = outputFormatForMetadata(metadata)
+    mimeType = format.mimeType
+    fileExt = format.fileExt
+
+    let originalPipeline = sharp(fileBuffer).rotate()
+    if ((metadata.width ?? 0) > config.originalMaxWidth) {
+      originalPipeline = originalPipeline.resize({
+        width: config.originalMaxWidth,
+        withoutEnlargement: true,
+      })
+    }
+
+    optimizedOriginalBuffer =
+      format.mimeType === 'image/webp'
+        ? await originalPipeline.webp({ quality: config.originalWebpQuality }).toBuffer()
+        : await originalPipeline.jpeg({ quality: config.originalJpegQuality, mozjpeg: true }).toBuffer()
+
+    metadata = await sharp(optimizedOriginalBuffer).metadata()
+    thumbBuffer = await sharp(optimizedOriginalBuffer)
       .resize({ width: config.thumbWidth, withoutEnlargement: true })
       .jpeg({ quality: 82 })
       .toBuffer()
@@ -80,12 +112,17 @@ export async function persistProductImage(
     throw new InvalidProductImageFileError()
   }
 
+  const originalRelpath = path.posix.join('original', params.skuId, `${params.imageId}${fileExt}`)
+  const thumbRelpath = path.posix.join('thumb', params.skuId, `${params.imageId}.jpg`)
+  const originalAbsPath = resolveWithinRoot(config.rootDir, originalRelpath)
+  const thumbAbsPath = resolveWithinRoot(config.rootDir, thumbRelpath)
+
   await productImageFileIo.mkdir(path.dirname(originalAbsPath), { recursive: true })
   await productImageFileIo.mkdir(path.dirname(thumbAbsPath), { recursive: true })
 
   try {
     await Promise.all([
-      productImageFileIo.writeFile(originalAbsPath, fileBuffer),
+      productImageFileIo.writeFile(originalAbsPath, optimizedOriginalBuffer),
       productImageFileIo.writeFile(thumbAbsPath, thumbBuffer),
     ])
   } catch (error) {
@@ -98,11 +135,12 @@ export async function persistProductImage(
     thumbRelpath,
     originalAbsPath,
     thumbAbsPath,
-    fileExt: ext,
-    fileSize: fileBuffer.byteLength,
+    mimeType,
+    fileExt,
+    fileSize: optimizedOriginalBuffer.byteLength,
     width: metadata.width ?? 0,
     height: metadata.height ?? 0,
-    sha256: crypto.createHash('sha256').update(fileBuffer).digest('hex'),
+    sha256: crypto.createHash('sha256').update(optimizedOriginalBuffer).digest('hex'),
   }
 }
 

@@ -164,7 +164,7 @@ export async function uploadProductImages(
           storageKey: pathJoinStorageKey(params.skuId, imageId),
           originalRelpath: storedFile.originalRelpath,
           thumbRelpath: storedFile.thumbRelpath,
-          mimeType: file.mimetype,
+          mimeType: storedFile.mimeType,
           fileExt: storedFile.fileExt,
           fileSize: storedFile.fileSize,
           width: storedFile.width,

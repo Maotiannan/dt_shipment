@@ -22,7 +22,8 @@ export type FishOrder = {
   total_amount: number
   ship_status: ShipStatus
   tracking_number: string | null
-  tracking_method: TrackingMethod | null
+  delivery_channel: DeliveryChannel | null
+  tracking_method?: string | null
   is_abnormal: boolean
   abnormal_type: AbnormalType | null
   remark: string | null

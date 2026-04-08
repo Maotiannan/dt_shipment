@@ -276,14 +276,16 @@ dbTest(
       }
     )
     assert.equal(originalRes.status, 200)
-    assert.match(originalRes.headers.get('content-type') ?? '', /^image\/png/)
+    assert.match(originalRes.headers.get('content-type') ?? '', /^image\/(webp|jpeg)/)
     assert.ok((await originalRes.arrayBuffer()).byteLength > 0)
 
-    const originalFiles = await readFile(
-      path.join(tempRoot, 'original', sku.sku_id, `${payload.images[0]?.image_id}.png`)
+    const files = await listFilesRecursive(tempRoot)
+    const originalPath = files.find((file) =>
+      file.startsWith(`original/${sku.sku_id}/${payload.images[0]?.image_id}.`)
     )
+    assert.ok(originalPath)
+    const originalFiles = await readFile(path.join(tempRoot, originalPath))
     assert.ok(originalFiles.byteLength > 0)
-    assert.ok((await listFilesRecursive(tempRoot)).length > 0)
     assert.equal(running.pool.options.database, 'dt_ship_manager')
   }
 )

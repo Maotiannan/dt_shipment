@@ -4,6 +4,9 @@ export type ProductImageConfig = {
   maxFiles: number
   maxFileBytes: number
   allowedMimeTypes: string[]
+  originalMaxWidth: number
+  originalJpegQuality: number
+  originalWebpQuality: number
   thumbWidth: number
   trashRetentionDays: number
 }
@@ -64,6 +67,21 @@ export function loadProductImageConfig(
     ),
     maxFileBytes: maxFileMb * 1024 * 1024,
     allowedMimeTypes,
+    originalMaxWidth: parsePositiveInteger(
+      env.PRODUCT_IMAGE_ORIGINAL_MAX_WIDTH,
+      'PRODUCT_IMAGE_ORIGINAL_MAX_WIDTH',
+      1800
+    ),
+    originalJpegQuality: parsePositiveInteger(
+      env.PRODUCT_IMAGE_ORIGINAL_JPEG_QUALITY,
+      'PRODUCT_IMAGE_ORIGINAL_JPEG_QUALITY',
+      82
+    ),
+    originalWebpQuality: parsePositiveInteger(
+      env.PRODUCT_IMAGE_ORIGINAL_WEBP_QUALITY,
+      'PRODUCT_IMAGE_ORIGINAL_WEBP_QUALITY',
+      84
+    ),
     thumbWidth: parsePositiveInteger(
       env.PRODUCT_IMAGE_THUMB_WIDTH,
       'PRODUCT_IMAGE_THUMB_WIDTH',

@@ -4,7 +4,7 @@
 
 ## 当前部署结论
 
-- 当前补丁版本: `1.1.1`
+- 当前版本: `1.2.0`
 - 前端容器: `dt-shipment-frontend`
 - 后端容器: `dt-shipment-backend`
 - 数据库容器: `dt-shipment-db`
@@ -49,10 +49,11 @@ PostgreSQL 的热数据目录不能直接放在 SMB 共享上。原因是 Postgr
 
 商品图片采用“NAS 私有文件仓 + PostgreSQL 元数据”模型:
 
-- 原图目录: `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products/originals`
-- 缩略图目录: `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products/thumbs`
+- 原图目录: `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products/original`
+- 缩略图目录: `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products/thumb`
 - 回收站目录: `/Volumes/团队文件-DAINTY_SHIPMENT/docker/dt_shipment/assets/products/trash`
 - 数据库只保存 `sku_id`、排序、主图标记、相对路径、尺寸、哈希和删除状态等元数据
+- 原图入库前会做一次优化压缩，默认限制最大宽度并重新编码，缩略图单独生成
 - 前端商品列表与 SKU 编辑页优先读取紧凑缩略图，点击后再弹层加载大图预览
 - 所有图片读取都经由 `dt_shipment` 后端鉴权代理，不复用 Alist / PicList 的公开访问范围
 
@@ -100,6 +101,9 @@ dt_shipment/
 | `PRODUCT_IMAGE_MAX_FILES` | 单次最多上传图片数，默认 `12` |
 | `PRODUCT_IMAGE_MAX_FILE_MB` | 单张图片大小限制，默认 `10` MB |
 | `PRODUCT_IMAGE_ALLOWED_MIME` | 允许上传的图片 MIME 列表 |
+| `PRODUCT_IMAGE_ORIGINAL_MAX_WIDTH` | 原图优化后的最大宽度，默认 `1800` |
+| `PRODUCT_IMAGE_ORIGINAL_JPEG_QUALITY` | 原图 JPEG 压缩质量，默认 `82` |
+| `PRODUCT_IMAGE_ORIGINAL_WEBP_QUALITY` | 原图 WebP 压缩质量，默认 `84` |
 | `PRODUCT_IMAGE_THUMB_WIDTH` | 缩略图目标宽度，默认 `480` |
 | `PRODUCT_IMAGE_TRASH_RETENTION_DAYS` | 图片回收站保留天数，默认 `30` |
 
@@ -180,6 +184,7 @@ npm run test:smoke
 - `PUT /api/orders/:id`
 - `DELETE /api/orders/:id`
 - `POST /api/skus`
+- `GET /api/sku-attribute-suggestions`
 - `POST /api/skus/:id/images`
 - `PATCH /api/skus/:id/images/reorder`
 - `PATCH /api/skus/:id/images/:imageId/primary`
@@ -238,6 +243,7 @@ npm run dev
 | `DELETE /api/accounts/:id` | 删除账号；若已被订单引用则返回冲突 |
 | `GET /api/skus` | 商品列表 |
 | `GET /api/skus/:id` | 商品详情与图片列表 |
+| `GET /api/sku-attribute-suggestions` | SKU 类目/颜色/规格候选项 |
 | `DELETE /api/skus/:id` | 删除 SKU，并清理关联图片文件 |
 | `POST /api/skus/:id/images` | 上传商品图片 |
 | `GET /api/product-images/:imageId/thumb` | 鉴权读取缩略图 |
@@ -256,8 +262,9 @@ npm run dev
 ## 当前页面 CRUD 结论
 
 - 账号管理：支持新增、列表查询、编辑、停用、删除；若账号已被订单引用会阻止删除
-- 产品库：支持新增、列表查询、编辑、停用、删除，商品图片走 NAS 私有文件仓
+- 产品库：支持新增、列表查询、编辑、停用、删除；SKU 结构化为类目/颜色/规格，支持库存维护、候选项沉淀和同流程上传商品图片
 - 订单管理：支持新增、列表查询、按订单号读取详情、完整编辑、删除、CSV 批量导入与 Excel 导出
+- 结算管理：展示所有仍有应收金额的订单，不再只限批发订单
 - 结算管理：定位为订单结算子视图，负责批发订单收款更新与欠款汇总，不单独承担订单新增/删除
 
 ## 相关运维文件

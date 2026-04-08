@@ -20,6 +20,9 @@ export type ProductSkuDetail = {
   spec: string | null
   unit_price: number
   category: string | null
+  category_name: string | null
+  color_name: string | null
+  variant_name: string | null
   status: string
   created_at: string
   inventory_id?: string | null
