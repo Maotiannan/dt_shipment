@@ -1,6 +1,7 @@
 export type BizOrderType = 'wholesale' | 'retail'
-export type ShipStatus = 'pending' | 'shipped_private' | 'shipped_uploaded'
-export type TrackingMethod = 'private_chat' | 'platform_upload'
+export type ShipStatus = 'pending' | 'shipped'
+export type DeliveryChannel = 'private_chat' | 'platform_upload'
+export type TrackingMethod = DeliveryChannel
 export type AbnormalType = 'resend' | 'address_error' | 'reject' | 'other'
 export type SettlementStatus = 'unpaid' | 'partial_paid' | 'settled'
 
@@ -127,9 +128,9 @@ export function createOrderFormFromOrder(order: FishOrder): OrderFormState {
     buyerName: order.buyer_name,
     address: order.shipping_address,
     items: normalizeOrderItems(order.items),
-    shipStatus: order.ship_status,
+    shipStatus: order.ship_status === 'shipped' ? 'shipped' : 'pending',
     trackingNumber: order.tracking_number ?? '',
-    trackingMethod: order.tracking_method ?? 'private_chat',
+    trackingMethod: order.delivery_channel ?? 'private_chat',
     isAbnormal: order.is_abnormal,
     abnormalType: order.abnormal_type ?? 'resend',
     remark: order.remark ?? '',
@@ -153,7 +154,7 @@ export function buildOrderPayload(form: OrderFormState) {
     .filter((item) => item.name)
 
   const isWholesale = form.orderType === 'wholesale'
-  const isShipped = form.shipStatus !== 'pending'
+  const isShipped = form.shipStatus === 'shipped'
   const trimmedTrackingNumber = form.trackingNumber.trim()
   const trimmedRemark = form.remark.trim()
   const trimmedPaidRemark = form.paidRemark.trim()
@@ -166,9 +167,9 @@ export function buildOrderPayload(form: OrderFormState) {
     shipping_address: form.address.trim(),
     items: normalizedItems,
     total_amount: computeOrderTotal(normalizedItems),
-    ship_status: form.shipStatus,
+    ship_status: isShipped ? 'shipped' : 'pending',
     tracking_number: isShipped && trimmedTrackingNumber ? trimmedTrackingNumber : null,
-    tracking_method: isShipped ? form.trackingMethod : null,
+    delivery_channel: isShipped ? form.trackingMethod : null,
     is_abnormal: form.isAbnormal,
     abnormal_type: form.isAbnormal ? form.abnormalType : null,
     remark: form.isAbnormal && trimmedRemark ? trimmedRemark : null,
