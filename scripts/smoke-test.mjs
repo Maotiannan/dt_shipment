@@ -181,34 +181,97 @@ async function main() {
     }),
   })
 
-  const orderId = `SMOKE-ORDER-${Date.now()}`
-  const createdOrder = await expectJson('/api/orders', {
+  const importedSkuCode = `SMOKE-${Date.now()}`
+  const skuImportPreview = await expectJson('/api/skus/import/preview', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       ...authHeaders,
     },
     body: JSON.stringify({
-      order_id: orderId,
-      account_id: accountA.account_id,
-      order_type: 'wholesale',
-      buyer_name: 'Smoke Buyer',
-      shipping_address: 'Smoke Address',
-      items: [{ sku_id: null, inventory_id: null, name: 'Smoke Item', qty: 1, unit_price: 8 }],
-      total_amount: 8,
-      ship_status: 'pending',
-      tracking_number: null,
-      tracking_method: null,
-      is_abnormal: false,
-      abnormal_type: null,
-      remark: null,
-      settlement_status: 'unpaid',
-      paid_amount: 0,
+      rows: [
+        {
+          sku_code: importedSkuCode,
+          name: 'Smoke image product',
+          category_name: 'Smoke Category',
+          color_name: 'Smoke White',
+          variant_name: 'Smoke XL',
+          unit_price: 1,
+          inventory_quantity: 9,
+          status: 'active',
+        },
+      ],
     }),
   })
-  if (createdOrder?.order_id !== orderId) {
-    throw new Error(`order create returned unexpected payload: ${JSON.stringify(createdOrder)}`)
+  if (!skuImportPreview?.can_commit || skuImportPreview?.rows?.[0]?.action !== 'create') {
+    throw new Error(`sku import preview returned unexpected payload: ${JSON.stringify(skuImportPreview)}`)
   }
+
+  await expectJson('/api/skus/import/commit', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      rows: skuImportPreview.rows.map((row) => row.data),
+    }),
+  })
+
+  const skuListAfterImport = await expectJson('/api/skus', {
+    headers: authHeaders,
+  })
+  const sku = skuListAfterImport.find((item) => item.sku_code === importedSkuCode)
+  if (
+    !sku?.sku_id ||
+    sku.category_name !== 'Smoke Category' ||
+    sku.color_name !== 'Smoke White' ||
+    sku.variant_name !== 'Smoke XL' ||
+    Number(sku.inventory_quantity) !== 9
+  ) {
+    throw new Error(`/api/skus import did not create expected sku: ${JSON.stringify(sku)}`)
+  }
+
+  const orderId = `SMOKE-ORDER-${Date.now()}`
+  const orderImportPreview = await expectJson('/api/orders/import/preview', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      rows: [
+        {
+          order_id: orderId,
+          order_type: 'wholesale',
+          account_name: accountA.account_name,
+          buyer_name: 'Smoke Buyer',
+          shipping_address: 'Smoke Address',
+          sku_code: importedSkuCode,
+          sku_name: 'Smoke image product',
+          qty: 1,
+          unit_price: 8,
+          is_abnormal: false,
+          abnormal_type: '',
+          abnormal_remark: '',
+        },
+      ],
+    }),
+  })
+  if (!orderImportPreview?.can_commit || orderImportPreview?.rows?.[0]?.action !== 'create') {
+    throw new Error(`order import preview returned unexpected payload: ${JSON.stringify(orderImportPreview)}`)
+  }
+
+  await expectJson('/api/orders/import/commit', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      rows: orderImportPreview.rows.map((row) => row.data),
+    }),
+  })
 
   const fetchedOrder = await expectJson(`/api/orders/${orderId}`, {
     headers: authHeaders,
@@ -240,9 +303,9 @@ async function main() {
       order_type: 'retail',
       buyer_name: 'Smoke Buyer Updated',
       shipping_address: 'Smoke Address Updated',
-      items: [{ sku_id: null, inventory_id: null, name: 'Smoke Item Updated', qty: 2, unit_price: 6 }],
+      items: [{ sku_id: sku.sku_id, inventory_id: null, name: 'Smoke Item Updated', qty: 2, unit_price: 6 }],
       total_amount: 12,
-      ship_status: 'shipped_uploaded',
+      ship_status: 'shipped',
       tracking_number: 'SMOKE-YT-001',
       tracking_method: 'platform_upload',
       is_abnormal: true,
@@ -295,34 +358,6 @@ async function main() {
   })
   if (!deletedAccountB?.ok || deletedAccountB.deletedAccountId !== accountB.account_id) {
     throw new Error(`account B delete returned unexpected payload: ${JSON.stringify(deletedAccountB)}`)
-  }
-
-  const sku = await expectJson('/api/skus', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...authHeaders,
-    },
-    body: JSON.stringify({
-      sku_code: `SMOKE-${Date.now()}`,
-      name: 'Smoke image product',
-      category_name: 'Smoke Category',
-      color_name: 'Smoke White',
-      variant_name: 'Smoke XL',
-      unit_price: 1,
-      inventory_quantity: 9,
-      status: 'active',
-    }),
-  })
-
-  if (
-    !sku?.sku_id ||
-    sku.category_name !== 'Smoke Category' ||
-    sku.color_name !== 'Smoke White' ||
-    sku.variant_name !== 'Smoke XL' ||
-    Number(sku.inventory_quantity) !== 9
-  ) {
-    throw new Error(`/api/skus did not return sku_id: ${JSON.stringify(sku)}`)
   }
 
   const categorySuggestions = await expectJson('/api/sku-attribute-suggestions?attribute=category', {

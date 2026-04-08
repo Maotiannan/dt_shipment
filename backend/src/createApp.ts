@@ -21,6 +21,8 @@ import {
   upsertSkuAttributeSuggestionsTx,
   type SkuAttributeType,
 } from './skuAttributes/suggestions.js'
+import { commitOrderImport, previewOrderImport } from './imports/orderImport.js'
+import { commitSkuImport, previewSkuImport } from './imports/skuImport.js'
 
 function toProductImageSummary(row: ProductImageRow) {
   return {
@@ -618,6 +620,34 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
     return res.json({ ok: true, deletedSkuId: skuId })
   })
 
+  app.post('/api/skus/import/preview', requireAuth, async (req, res) => {
+    const rows = (req.body?.rows ?? []) as Array<Record<string, unknown>>
+    if (!Array.isArray(rows)) {
+      return res.status(400).json({ error: 'rows required' })
+    }
+
+    const preview = await previewSkuImport(pool, rows)
+    return res.json(preview)
+  })
+
+  app.post('/api/skus/import/commit', requireAuth, async (req, res) => {
+    const rows = (req.body?.rows ?? []) as Array<Record<string, unknown>>
+    if (!Array.isArray(rows)) {
+      return res.status(400).json({ error: 'rows required' })
+    }
+
+    try {
+      const result = await commitSkuImport(pool, rows)
+      return res.json(result)
+    } catch (error) {
+      if (isInventoryLedgerError(error)) {
+        return res.status(error.statusCode).json({ error: error.message })
+      }
+
+      throw error
+    }
+  })
+
   app.get('/api/orders', requireAuth, async (req, res) => {
     const orderType = req.query.order_type as string | undefined
     if (orderType) {
@@ -899,6 +929,34 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
       throw error
     } finally {
       client.release()
+    }
+  })
+
+  app.post('/api/orders/import/preview', requireAuth, async (req, res) => {
+    const rows = (req.body?.rows ?? []) as Array<Record<string, unknown>>
+    if (!Array.isArray(rows)) {
+      return res.status(400).json({ error: 'rows required' })
+    }
+
+    const preview = await previewOrderImport(pool, rows)
+    return res.json(preview)
+  })
+
+  app.post('/api/orders/import/commit', requireAuth, async (req, res) => {
+    const rows = (req.body?.rows ?? []) as Array<Record<string, unknown>>
+    if (!Array.isArray(rows)) {
+      return res.status(400).json({ error: 'rows required' })
+    }
+
+    try {
+      const result = await commitOrderImport(pool, rows)
+      return res.json(result)
+    } catch (error) {
+      if (isInventoryLedgerError(error)) {
+        return res.status(error.statusCode).json({ error: error.message })
+      }
+
+      throw error
     }
   })
 

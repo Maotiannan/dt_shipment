@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
 
 import {
-  commitOrderImport,
-  previewOrderImport,
-  type OrderImportDraft,
-  type OrderImportPreviewData,
+  commitSkuImport,
+  previewSkuImport,
+  type SkuImportDraft,
+  type SkuImportPreviewData,
 } from '../lib/importApi'
 import {
   canCommitImportPreview,
@@ -15,27 +15,27 @@ import {
 import { downloadCsvTemplate, mapSpreadsheetRows, parseSpreadsheetFile } from '../lib/importWorkbook'
 import ImportPreviewTable from './ImportPreviewTable'
 
-const headerMap: Record<string, string> = {
-  订单号: 'order_id',
-  订单类型: 'order_type',
-  账号名称: 'account_name',
-  买家昵称: 'buyer_name',
-  收货地址: 'shipping_address',
+const skuHeaderMap: Record<string, string> = {
   SKU编码: 'sku_code',
-  SKU名称: 'sku_name',
-  数量: 'qty',
+  产品名称: 'name',
+  类目: 'category_name',
+  颜色: 'color_name',
+  规格: 'variant_name',
   单价: 'unit_price',
-  是否异常: 'is_abnormal',
-  异常类型: 'abnormal_type',
-  异常备注: 'abnormal_remark',
+  库存: 'inventory_quantity',
+  状态: 'status',
 }
 
-export default function OrdersCsvImport({ onImported }: { onImported: () => void }) {
+type Props = {
+  onImported: () => void
+}
+
+export default function SkusImportDialog({ onImported }: Props) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
-  const [rows, setRows] = useState<Array<ImportPreviewRow<OrderImportPreviewData>>>([])
+  const [rows, setRows] = useState<Array<ImportPreviewRow<SkuImportPreviewData>>>([])
 
   const canCommit = useMemo(() => canCommitImportPreview(rows), [rows])
 
@@ -46,14 +46,25 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
 
   function downloadTemplate() {
     downloadCsvTemplate(
-      '发货管家_订单导入模板.csv',
-      ['订单号', '订单类型', '账号名称', '买家昵称', '收货地址', 'SKU编码', 'SKU名称', '数量', '单价', '是否异常', '异常类型', '异常备注'],
-      [['10001', 'wholesale', '女装专号', '张三', '广东省广州市天河区xx路xx号', 'SKU-001', '连衣裙', 2, 59.9, 'false', '', '']]
+      '发货管家_SKU导入模板.csv',
+      ['SKU编码', '产品名称', '类目', '颜色', '规格', '单价', '库存', '状态'],
+      [['SKU-001', '示例短袖', '上衣', '白色', 'M', 49.9, 12, 'active']]
     )
   }
 
-  async function revalidate(nextRows: OrderImportDraft[]) {
-    const preview = await previewOrderImport(nextRows)
+  async function revalidate(nextRows: Array<SkuImportDraft | SkuImportPreviewData>) {
+    const preview = await previewSkuImport(
+      nextRows.map((row) => ({
+        sku_code: row.sku_code,
+        name: row.name,
+        category_name: row.category_name ?? '',
+        color_name: row.color_name ?? '',
+        variant_name: row.variant_name ?? '',
+        unit_price: row.unit_price,
+        inventory_quantity: row.inventory_quantity,
+        status: row.status,
+      }))
+    )
     setRows(preview.rows)
   }
 
@@ -63,11 +74,11 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
 
     try {
       const parsed = await parseSpreadsheetFile(file)
-      const mapped = mapSpreadsheetRows(parsed, headerMap) as OrderImportDraft[]
-      const preview = await previewOrderImport(mapped)
+      const mapped = mapSpreadsheetRows(parsed, skuHeaderMap) as SkuImportDraft[]
+      const preview = await previewSkuImport(mapped)
       setRows(preview.rows)
     } catch (error) {
-      setErrorMsg(error instanceof Error ? error.message : '订单导入预检失败')
+      setErrorMsg(error instanceof Error ? error.message : 'SKU 导入预检失败')
     } finally {
       setBusy(false)
     }
@@ -78,12 +89,13 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
     resetMessages()
 
     try {
-      const result = await commitOrderImport(rows.map((row) => row.data))
+      const payload = rows.map((row) => row.data)
+      const result = await commitSkuImport(payload)
       setSuccessMsg(`导入完成：新增 ${result.created_count}，覆盖 ${result.overwritten_count}`)
       setRows([])
       onImported()
     } catch (error) {
-      setErrorMsg(error instanceof Error ? error.message : '订单导入失败')
+      setErrorMsg(error instanceof Error ? error.message : 'SKU 导入失败')
     } finally {
       setBusy(false)
     }
@@ -97,16 +109,15 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
           setOpen(true)
           resetMessages()
         }}
-        style={{ width: '100%' }}
       >
-        导入订单（CSV / Excel）
+        批量导入 SKU
       </button>
 
       {open ? (
         <div className="modalOverlay" role="dialog" aria-modal="true">
           <div className="modal">
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-              <h3 style={{ margin: 0 }}>批量导入订单</h3>
+              <h3 style={{ margin: 0 }}>批量导入 SKU</h3>
               <button className="ghostBtn" onClick={() => setOpen(false)} disabled={busy}>
                 关闭
               </button>
@@ -150,73 +161,13 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                       <input
                         className="control"
-                        value={row.data.order_id}
+                        value={row.data.sku_code}
                         onChange={(event) =>
                           setRows((current) =>
                             updateImportPreviewRow(current, row.key, (target) => ({
                               ...target,
                               key: event.target.value || target.key,
-                              data: { ...target.data, order_id: event.target.value },
-                            }))
-                          )
-                        }
-                        placeholder="订单号"
-                      />
-                      <select
-                        className="control"
-                        value={row.data.order_type}
-                        onChange={(event) =>
-                          setRows((current) =>
-                            updateImportPreviewRow(current, row.key, (target) => ({
-                              ...target,
-                              data: {
-                                ...target.data,
-                                order_type:
-                                  event.target.value === 'retail' ? 'retail' : 'wholesale',
-                                settlement_status:
-                                  event.target.value === 'retail' ? null : 'unpaid',
-                              },
-                            }))
-                          )
-                        }
-                      >
-                        <option value="wholesale">wholesale</option>
-                        <option value="retail">retail</option>
-                      </select>
-                      <input
-                        className="control"
-                        value={row.data.account_name}
-                        onChange={(event) =>
-                          setRows((current) =>
-                            updateImportPreviewRow(current, row.key, (target) => ({
-                              ...target,
-                              data: { ...target.data, account_name: event.target.value, account_id: null },
-                            }))
-                          )
-                        }
-                        placeholder="账号名称"
-                      />
-                      <input
-                        className="control"
-                        value={row.data.buyer_name}
-                        onChange={(event) =>
-                          setRows((current) =>
-                            updateImportPreviewRow(current, row.key, (target) => ({
-                              ...target,
-                              data: { ...target.data, buyer_name: event.target.value },
-                            }))
-                          )
-                        }
-                        placeholder="买家昵称"
-                      />
-                      <input
-                        className="control"
-                        value={row.data.sku_code ?? ''}
-                        onChange={(event) =>
-                          setRows((current) =>
-                            updateImportPreviewRow(current, row.key, (target) => ({
-                              ...target,
-                              data: { ...target.data, sku_code: event.target.value || null },
+                              data: { ...target.data, sku_code: event.target.value },
                             }))
                           )
                         }
@@ -224,44 +175,55 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
                       />
                       <input
                         className="control"
-                        value={row.data.sku_name}
+                        value={row.data.name}
                         onChange={(event) =>
                           setRows((current) =>
                             updateImportPreviewRow(current, row.key, (target) => ({
                               ...target,
-                              data: {
-                                ...target.data,
-                                sku_name: event.target.value,
-                                items: target.data.items.map((item) => ({
-                                  ...item,
-                                  name: event.target.value,
-                                })),
-                              },
+                              data: { ...target.data, name: event.target.value },
                             }))
                           )
                         }
-                        placeholder="SKU名称"
+                        placeholder="产品名称"
                       />
                       <input
                         className="control"
-                        inputMode="numeric"
-                        value={String(row.data.qty)}
+                        value={row.data.category_name ?? ''}
                         onChange={(event) =>
                           setRows((current) =>
                             updateImportPreviewRow(current, row.key, (target) => ({
                               ...target,
-                              data: {
-                                ...target.data,
-                                qty: Number(event.target.value || 0),
-                                items: target.data.items.map((item) => ({
-                                  ...item,
-                                  qty: Number(event.target.value || 0),
-                                })),
-                              },
+                              data: { ...target.data, category_name: event.target.value || null },
                             }))
                           )
                         }
-                        placeholder="数量"
+                        placeholder="类目"
+                      />
+                      <input
+                        className="control"
+                        value={row.data.color_name ?? ''}
+                        onChange={(event) =>
+                          setRows((current) =>
+                            updateImportPreviewRow(current, row.key, (target) => ({
+                              ...target,
+                              data: { ...target.data, color_name: event.target.value || null },
+                            }))
+                          )
+                        }
+                        placeholder="颜色"
+                      />
+                      <input
+                        className="control"
+                        value={row.data.variant_name ?? ''}
+                        onChange={(event) =>
+                          setRows((current) =>
+                            updateImportPreviewRow(current, row.key, (target) => ({
+                              ...target,
+                              data: { ...target.data, variant_name: event.target.value || null },
+                            }))
+                          )
+                        }
+                        placeholder="规格"
                       />
                       <input
                         className="control"
@@ -271,36 +233,47 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
                           setRows((current) =>
                             updateImportPreviewRow(current, row.key, (target) => ({
                               ...target,
-                              data: {
-                                ...target.data,
-                                unit_price: Number(event.target.value || 0),
-                                total_amount:
-                                  Number(event.target.value || 0) * Number(target.data.qty || 0),
-                                items: target.data.items.map((item) => ({
-                                  ...item,
-                                  unit_price: Number(event.target.value || 0),
-                                })),
-                              },
+                              data: { ...target.data, unit_price: Number(event.target.value || 0) },
                             }))
                           )
                         }
                         placeholder="单价"
                       />
-                      <textarea
+                      <input
                         className="control"
-                        value={row.data.shipping_address}
+                        inputMode="numeric"
+                        value={String(row.data.inventory_quantity)}
                         onChange={(event) =>
                           setRows((current) =>
                             updateImportPreviewRow(current, row.key, (target) => ({
                               ...target,
-                              data: { ...target.data, shipping_address: event.target.value },
+                              data: {
+                                ...target.data,
+                                inventory_quantity: Number(event.target.value || 0),
+                              },
                             }))
                           )
                         }
-                        placeholder="收货地址"
-                        rows={2}
-                        style={{ gridColumn: '1 / -1' }}
+                        placeholder="库存"
                       />
+                      <select
+                        className="control"
+                        value={row.data.status}
+                        onChange={(event) =>
+                          setRows((current) =>
+                            updateImportPreviewRow(current, row.key, (target) => ({
+                              ...target,
+                              data: {
+                                ...target.data,
+                                status: event.target.value === 'inactive' ? 'inactive' : 'active',
+                              },
+                            }))
+                          )
+                        }
+                      >
+                        <option value="active">active</option>
+                        <option value="inactive">inactive</option>
+                      </select>
                     </div>
                   )}
                 />
@@ -309,24 +282,7 @@ export default function OrdersCsvImport({ onImported }: { onImported: () => void
                   <button
                     className="ghostBtn"
                     disabled={busy}
-                    onClick={() =>
-                      void revalidate(
-                        rows.map((row) => ({
-                          order_id: row.data.order_id,
-                          order_type: row.data.order_type,
-                          account_name: row.data.account_name,
-                          buyer_name: row.data.buyer_name,
-                          shipping_address: row.data.shipping_address,
-                          sku_code: row.data.sku_code ?? '',
-                          sku_name: row.data.sku_name,
-                          qty: row.data.qty,
-                          unit_price: row.data.unit_price,
-                          is_abnormal: row.data.is_abnormal,
-                          abnormal_type: row.data.abnormal_type ?? '',
-                          abnormal_remark: row.data.remark ?? '',
-                        }))
-                      )
-                    }
+                    onClick={() => void revalidate(rows.map((row) => row.data))}
                   >
                     重新校验
                   </button>

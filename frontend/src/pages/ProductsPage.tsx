@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import ProductImageManager from '../components/ProductImageManager'
+import SkusImportDialog from '../components/SkusImportDialog'
 import { removeItemById, upsertItemById } from '../lib/collectionState'
 import { apiRequest } from '../lib/apiClient'
 import {
@@ -352,6 +353,7 @@ export default function ProductsPage() {
             background: 'rgba(255,255,255,0.6)',
           }}
         />
+        <SkusImportDialog onImported={loadSkus} />
         <button className="primaryBtn" onClick={openCreate} disabled={loading}>
           新增 SKU
         </button>

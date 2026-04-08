@@ -179,12 +179,13 @@ async function seedSku(
     skuId: string
     name: string
     inventoryQuantity: number
+    skuCode?: string | null
   }
 ) {
   await pool.query(
-    `insert into skus(sku_id, name, status, inventory_quantity)
-     values ($1, $2, 'active', $3)`,
-    [sku.skuId, sku.name, sku.inventoryQuantity]
+    `insert into skus(sku_id, sku_code, name, status, inventory_quantity)
+     values ($1, $2, $3, 'active', $4)`,
+    [sku.skuId, sku.skuCode ?? null, sku.name, sku.inventoryQuantity]
   )
 }
 
@@ -197,6 +198,27 @@ async function readSkuInventory(pool: Pool, skuId: string) {
   )
 
   return Number(rows[0]?.inventory_quantity ?? 0)
+}
+
+async function readSkuByCode(pool: Pool, skuCode: string) {
+  const { rows } = await pool.query<{
+    sku_id: string
+    sku_code: string | null
+    name: string
+    category_name: string | null
+    color_name: string | null
+    variant_name: string | null
+    inventory_quantity: number | null
+    status: string
+  }>(
+    `select sku_id, sku_code, name, category_name, color_name, variant_name, inventory_quantity, status
+     from skus
+     where sku_code = $1
+     limit 1`,
+    [skuCode]
+  )
+
+  return rows[0] ?? null
 }
 
 async function readInventoryMovements(pool: Pool, orderId: string) {
@@ -268,6 +290,265 @@ test.after(async () => {
     }
   }
 })
+
+dbTest(
+  'sku import preview and commit create new rows, overwrite existing rows, and block invalid rows',
+  { concurrency: false },
+  async (t) => {
+    const runningDb = await getSharedRunningDatabase()
+    const { port, token } = await startTestApp(t)
+
+    await seedSku(runningDb.pool, {
+      skuId: '44444444-4444-4444-4444-444444444444',
+      skuCode: 'SKU-EXISTING',
+      name: 'Old Hoodie',
+      inventoryQuantity: 3,
+    })
+
+    const previewRes = await postJson(port, '/api/skus/import/preview', token, {
+      rows: [
+        {
+          sku_code: 'SKU-NEW-1',
+          name: 'New Tee',
+          category_name: '上衣',
+          color_name: '白色',
+          variant_name: 'M',
+          unit_price: '49.5',
+          inventory_quantity: '6',
+          status: 'active',
+        },
+        {
+          sku_code: 'SKU-EXISTING',
+          name: 'Updated Hoodie',
+          category_name: '上衣',
+          color_name: '黑色',
+          variant_name: 'XL',
+          unit_price: '79',
+          inventory_quantity: '8',
+          status: 'inactive',
+        },
+        {
+          sku_code: '',
+          name: 'Broken Row',
+          category_name: '上衣',
+          color_name: '灰色',
+          variant_name: 'L',
+          unit_price: '39',
+          inventory_quantity: '2',
+          status: 'active',
+        },
+      ],
+    })
+    assert.equal(previewRes.response.status, 200, previewRes.text)
+    const previewBody = JSON.parse(previewRes.text) as {
+      can_commit: boolean
+      rows: Array<{
+        key: string
+        action: string
+        status: string
+        errors: string[]
+        data: Record<string, unknown>
+      }>
+    }
+    assert.equal(previewBody.can_commit, false)
+    assert.equal(previewBody.rows[0]?.action, 'create')
+    assert.equal(previewBody.rows[0]?.status, 'success')
+    assert.equal(previewBody.rows[1]?.action, 'overwrite')
+    assert.equal(previewBody.rows[1]?.status, 'warning')
+    assert.equal(previewBody.rows[2]?.status, 'error')
+    assert.match(previewBody.rows[2]?.errors[0] ?? '', /sku_code/i)
+
+    const commitBlockedRes = await postJson(port, '/api/skus/import/commit', token, {
+      rows: previewBody.rows.map((row) => ({
+        ...row.data,
+        action: row.action,
+      })),
+    })
+    assert.equal(commitBlockedRes.response.status, 400, commitBlockedRes.text)
+    assert.match(commitBlockedRes.text, /error/i)
+
+    const validCommitRes = await postJson(port, '/api/skus/import/commit', token, {
+      rows: previewBody.rows
+        .filter((row) => row.status !== 'error')
+        .map((row) => ({
+          ...row.data,
+          action: row.action,
+        })),
+    })
+    assert.equal(validCommitRes.response.status, 200, validCommitRes.text)
+    const validCommitBody = JSON.parse(validCommitRes.text) as {
+      ok: boolean
+      created_count: number
+      overwritten_count: number
+    }
+    assert.equal(validCommitBody.ok, true)
+    assert.equal(validCommitBody.created_count, 1)
+    assert.equal(validCommitBody.overwritten_count, 1)
+
+    const createdSku = await readSkuByCode(runningDb.pool, 'SKU-NEW-1')
+    assert.equal(createdSku?.name, 'New Tee')
+    assert.equal(createdSku?.category_name, '上衣')
+    assert.equal(createdSku?.color_name, '白色')
+    assert.equal(createdSku?.variant_name, 'M')
+    assert.equal(Number(createdSku?.inventory_quantity ?? 0), 6)
+
+    const overwrittenSku = await readSkuByCode(runningDb.pool, 'SKU-EXISTING')
+    assert.equal(overwrittenSku?.name, 'Updated Hoodie')
+    assert.equal(overwrittenSku?.status, 'inactive')
+    assert.equal(overwrittenSku?.color_name, '黑色')
+    assert.equal(overwrittenSku?.variant_name, 'XL')
+    assert.equal(Number(overwrittenSku?.inventory_quantity ?? 0), 8)
+  }
+)
+
+dbTest(
+  'order import preview highlights overwrite rows and commit applies inventory-safe upserts',
+  { concurrency: false },
+  async (t) => {
+    const runningDb = await getSharedRunningDatabase()
+    const { port, token } = await startTestApp(t)
+
+    const accountRes = await postJson(port, '/api/accounts', token, {
+      account_name: 'Import Account',
+      remark: null,
+      biz_type: 'mixed',
+      status: 'active',
+    })
+    assert.equal(accountRes.response.status, 200, accountRes.text)
+    const account = JSON.parse(accountRes.text) as { account_id: string }
+
+    const skuId = '55555555-5555-5555-5555-555555555555'
+    await seedSku(runningDb.pool, {
+      skuId,
+      skuCode: 'ORDER-SKU-1',
+      name: 'Importable Tee',
+      inventoryQuantity: 5,
+    })
+
+    const existingOrderId = `ORDER-IMPORT-EXISTING-${Date.now()}`
+    const existingOrderRes = await postJson(port, '/api/orders', token, {
+      order_id: existingOrderId,
+      account_id: account.account_id,
+      order_type: 'wholesale',
+      buyer_name: 'Buyer Existing',
+      shipping_address: 'Shanghai',
+      items: [{ sku_id: skuId, inventory_id: null, name: 'Importable Tee', qty: 1, unit_price: 15 }],
+      total_amount: 15,
+      ship_status: 'pending',
+      tracking_number: null,
+      tracking_method: null,
+      is_abnormal: false,
+      abnormal_type: null,
+      remark: null,
+      settlement_status: 'unpaid',
+      paid_amount: 0,
+    })
+    assert.equal(existingOrderRes.response.status, 200, existingOrderRes.text)
+    assert.equal(await readSkuInventory(runningDb.pool, skuId), 4)
+
+    const previewRes = await postJson(port, '/api/orders/import/preview', token, {
+      rows: [
+        {
+          order_id: existingOrderId,
+          order_type: 'wholesale',
+          account_name: 'Import Account',
+          buyer_name: 'Buyer Existing Updated',
+          shipping_address: 'Hangzhou',
+          sku_code: 'ORDER-SKU-1',
+          qty: '2',
+          unit_price: '18',
+          is_abnormal: 'false',
+        },
+        {
+          order_id: `ORDER-IMPORT-NEW-${Date.now()}`,
+          order_type: 'retail',
+          account_name: 'Import Account',
+          buyer_name: 'Buyer New',
+          shipping_address: 'Suzhou',
+          sku_code: 'ORDER-SKU-1',
+          qty: '1',
+          unit_price: '20',
+          is_abnormal: 'false',
+        },
+        {
+          order_id: `ORDER-IMPORT-BAD-${Date.now()}`,
+          order_type: 'retail',
+          account_name: 'Import Account',
+          buyer_name: 'Buyer Bad',
+          shipping_address: 'Ningbo',
+          sku_code: 'MISSING-SKU',
+          qty: '1',
+          unit_price: '20',
+          is_abnormal: 'false',
+        },
+      ],
+    })
+    assert.equal(previewRes.response.status, 200, previewRes.text)
+    const previewBody = JSON.parse(previewRes.text) as {
+      can_commit: boolean
+      rows: Array<{
+        key: string
+        action: string
+        status: string
+        errors: string[]
+        data: Record<string, unknown>
+      }>
+    }
+    assert.equal(previewBody.can_commit, false)
+    assert.equal(previewBody.rows[0]?.action, 'overwrite')
+    assert.equal(previewBody.rows[0]?.status, 'warning')
+    assert.equal(previewBody.rows[1]?.action, 'create')
+    assert.equal(previewBody.rows[1]?.status, 'success')
+    assert.equal(previewBody.rows[2]?.status, 'error')
+    assert.match(previewBody.rows[2]?.errors.join(',') ?? '', /sku/i)
+
+    const blockedCommitRes = await postJson(port, '/api/orders/import/commit', token, {
+      rows: previewBody.rows.map((row) => ({
+        ...row.data,
+        action: row.action,
+      })),
+    })
+    assert.equal(blockedCommitRes.response.status, 400, blockedCommitRes.text)
+
+    const commitRes = await postJson(port, '/api/orders/import/commit', token, {
+      rows: previewBody.rows
+        .filter((row) => row.status !== 'error')
+        .map((row) => ({
+          ...row.data,
+          action: row.action,
+        })),
+    })
+    assert.equal(commitRes.response.status, 200, commitRes.text)
+    const commitBody = JSON.parse(commitRes.text) as {
+      ok: boolean
+      created_count: number
+      overwritten_count: number
+    }
+    assert.equal(commitBody.ok, true)
+    assert.equal(commitBody.created_count, 1)
+    assert.equal(commitBody.overwritten_count, 1)
+
+    const overwrittenOrderRes = await fetch(`http://127.0.0.1:${port}/api/orders/${existingOrderId}`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    const overwrittenOrderBody = await overwrittenOrderRes.text()
+    assert.equal(overwrittenOrderRes.status, 200, overwrittenOrderBody)
+    const overwrittenOrder = JSON.parse(overwrittenOrderBody) as {
+      buyer_name: string
+      shipping_address: string
+      total_amount: string
+      items: Array<{ sku_id: string; qty: number; unit_price: number }>
+    }
+    assert.equal(overwrittenOrder.buyer_name, 'Buyer Existing Updated')
+    assert.equal(overwrittenOrder.shipping_address, 'Hangzhou')
+    assert.equal(overwrittenOrder.total_amount, '36.00')
+    assert.deepEqual(overwrittenOrder.items, [
+      { sku_id: skuId, inventory_id: null, name: 'Importable Tee', qty: 2, unit_price: 18 },
+    ])
+
+    assert.equal(await readSkuInventory(runningDb.pool, skuId), 2)
+  }
+)
 
 dbTest(
   'sku routes persist structured attributes, seed suggestions, and record manual inventory adjustments',
