@@ -68,6 +68,12 @@ create table if not exists sku_attribute_suggestions (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists app_settings (
+  setting_key text primary key,
+  setting_value jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists push_subscriptions (
   subscription_id uuid primary key default gen_random_uuid(),
   endpoint text not null unique,

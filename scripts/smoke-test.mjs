@@ -153,6 +153,61 @@ async function main() {
     throw new Error(`/api/auth/me returned unexpected user: ${JSON.stringify(me)}`)
   }
 
+  const initialCommerceSettings = await expectJson('/api/settings/commerce', {
+    headers: authHeaders,
+  })
+  if (
+    initialCommerceSettings?.catalog_source !== 'internal_db' ||
+    initialCommerceSettings?.inventory_source !== 'internal_ledger'
+  ) {
+    throw new Error(
+      `/api/settings/commerce returned unexpected defaults: ${JSON.stringify(initialCommerceSettings)}`
+    )
+  }
+
+  const updatedCommerceSettings = await expectJson('/api/settings/commerce', {
+    method: 'PUT',
+    headers: {
+      'content-type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      catalog_source: 'odoo',
+      inventory_source: 'odoo',
+      external_system: 'odoo',
+      odoo_base_url: 'https://erp.example.com',
+      odoo_database: 'dainty',
+      odoo_api_mode: 'rpc_legacy',
+      notes: 'smoke-commerce-settings',
+    }),
+  })
+  if (
+    updatedCommerceSettings?.catalog_source !== 'odoo' ||
+    updatedCommerceSettings?.inventory_source !== 'odoo' ||
+    updatedCommerceSettings?.odoo_api_mode !== 'rpc_legacy'
+  ) {
+    throw new Error(
+      `/api/settings/commerce update returned unexpected payload: ${JSON.stringify(updatedCommerceSettings)}`
+    )
+  }
+
+  await expectJson('/api/settings/commerce', {
+    method: 'PUT',
+    headers: {
+      'content-type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      catalog_source: 'internal_db',
+      inventory_source: 'internal_ledger',
+      external_system: 'odoo',
+      odoo_base_url: '',
+      odoo_database: '',
+      odoo_api_mode: 'json2',
+      notes: '',
+    }),
+  })
+
   const accountA = await expectJson('/api/accounts', {
     method: 'POST',
     headers: {
@@ -642,6 +697,7 @@ async function main() {
     uploadedImages: upload.images.length,
     cleanup,
     deletedSkuId: deleteSku.deletedSkuId,
+    commerceCatalogSource: updatedCommerceSettings.catalog_source,
     checkedAt: new Date().toISOString(),
   }
 

@@ -634,7 +634,8 @@ async function readCommerceFoundationSchema(pool: Pool) {
           'push_subscriptions',
           'product_images',
           'inventory_movements',
-          'sku_attribute_suggestions'
+          'sku_attribute_suggestions',
+          'app_settings'
         )
     `),
   ])
@@ -682,6 +683,7 @@ dbTest('db:init leaves product_images convergence no-op on clean steady-state bo
     assert.equal(columns.has('delivery_channel'), true)
     assert.equal(tables.has('inventory_movements'), true)
     assert.equal(tables.has('sku_attribute_suggestions'), true)
+    assert.equal(tables.has('app_settings'), true)
   })
 
   await withDisposablePostgres(async (pool) => {

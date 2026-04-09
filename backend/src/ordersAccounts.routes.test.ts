@@ -753,6 +753,81 @@ dbTest(
 )
 
 dbTest(
+  'settings routes persist commerce source configuration for future odoo integration',
+  { concurrency: false },
+  async (t) => {
+    await getSharedRunningDatabase()
+    const { port, token } = await startTestApp(t)
+
+    const initialRes = await fetch(`http://127.0.0.1:${port}/api/settings/commerce`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    const initialBody = await initialRes.text()
+    assert.equal(initialRes.status, 200, initialBody)
+    const initial = JSON.parse(initialBody) as {
+      catalog_source: string
+      inventory_source: string
+      external_system: string
+      odoo_api_mode: string
+      odoo_base_url: string | null
+      odoo_database: string | null
+    }
+    assert.equal(initial.catalog_source, 'internal_db')
+    assert.equal(initial.inventory_source, 'internal_ledger')
+    assert.equal(initial.external_system, 'odoo')
+    assert.equal(initial.odoo_api_mode, 'json2')
+    assert.equal(initial.odoo_base_url, null)
+
+    const updateRes = await putJson(port, '/api/settings/commerce', token, {
+      catalog_source: 'odoo',
+      inventory_source: 'odoo',
+      external_system: 'odoo',
+      odoo_base_url: 'https://erp.example.com',
+      odoo_database: 'dainty',
+      odoo_api_mode: 'rpc_legacy',
+      notes: 'future master data owner',
+    })
+    assert.equal(updateRes.response.status, 200, updateRes.text)
+    const updated = JSON.parse(updateRes.text) as {
+      catalog_source: string
+      inventory_source: string
+      external_system: string
+      odoo_api_mode: string
+      odoo_base_url: string | null
+      odoo_database: string | null
+      notes: string | null
+      updated_at: string
+    }
+    assert.equal(updated.catalog_source, 'odoo')
+    assert.equal(updated.inventory_source, 'odoo')
+    assert.equal(updated.external_system, 'odoo')
+    assert.equal(updated.odoo_api_mode, 'rpc_legacy')
+    assert.equal(updated.odoo_base_url, 'https://erp.example.com')
+    assert.equal(updated.odoo_database, 'dainty')
+    assert.equal(updated.notes, 'future master data owner')
+    assert.ok(updated.updated_at)
+
+    const persistedRes = await fetch(`http://127.0.0.1:${port}/api/settings/commerce`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    const persistedBody = await persistedRes.text()
+    assert.equal(persistedRes.status, 200, persistedBody)
+    const persisted = JSON.parse(persistedBody) as {
+      catalog_source: string
+      inventory_source: string
+      odoo_base_url: string | null
+      odoo_database: string | null
+      notes: string | null
+    }
+    assert.equal(persisted.catalog_source, 'odoo')
+    assert.equal(persisted.inventory_source, 'odoo')
+    assert.equal(persisted.odoo_base_url, 'https://erp.example.com')
+    assert.equal(persisted.odoo_database, 'dainty')
+    assert.equal(persisted.notes, 'future master data owner')
+  }
+)
+
+dbTest(
   'account deletion blocks referenced accounts and removes safe accounts',
   { concurrency: false },
   async (t) => {

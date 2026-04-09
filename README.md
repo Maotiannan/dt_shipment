@@ -4,7 +4,7 @@
 
 ## 当前部署结论
 
-- 当前版本: `1.4.0`
+- 当前版本: `1.5.0`
 - 前端容器: `dt-shipment-frontend`
 - 后端容器: `dt-shipment-backend`
 - 数据库容器: `dt-shipment-db`
@@ -188,6 +188,8 @@ npm run test:smoke
 - `GET /api/settings/sku-attribute-suggestions`
 - `POST /api/settings/sku-attribute-suggestions`
 - `PUT /api/settings/sku-attribute-suggestions/:id`
+- `GET /api/settings/commerce`
+- `PUT /api/settings/commerce`
 - `POST /api/skus/:id/images`
 - `PATCH /api/skus/:id/images/reorder`
 - `PATCH /api/skus/:id/images/:imageId/primary`
@@ -252,6 +254,8 @@ npm run dev
 | `GET /api/settings/sku-attribute-suggestions` | 设置中心读取 SKU 候选项治理列表 |
 | `POST /api/settings/sku-attribute-suggestions` | 设置中心新增候选项 |
 | `PUT /api/settings/sku-attribute-suggestions/:id` | 设置中心编辑或启停候选项 |
+| `GET /api/settings/commerce` | 读取商品/库存主数据来源配置 |
+| `PUT /api/settings/commerce` | 保存未来 OpenERP / Odoo 接入配置 |
 | `DELETE /api/skus/:id` | 删除 SKU，并清理关联图片文件 |
 | `POST /api/skus/:id/images` | 上传商品图片 |
 | `GET /api/product-images/:imageId/thumb` | 鉴权读取缩略图 |
@@ -278,7 +282,14 @@ npm run dev
 - 订单管理：支持新增、列表查询、按订单号读取详情、完整编辑、删除、`CSV / XLSX / XLS` 导入预检、覆盖导入与 Excel 导出
 - 结算管理：展示所有仍有应收金额的订单，不再只限批发订单
 - 结算管理：定位为订单结算子视图，负责批发订单收款更新与欠款汇总，不单独承担订单新增/删除
-- 设置中心：第一版已上线，当前用于治理 SKU 类目/颜色/规格候选项，支持新增、查询、编辑和启停
+- 设置中心：第一版已上线，当前用于治理 SKU 类目/颜色/规格候选项，并持久化商品/库存主数据来源，预留未来 OpenERP / Odoo 接入配置
+
+## 批量导入模板
+
+- SKU 导入模板和订单导入模板目前都是中文列头
+- 产品页可直接下载 `发货管家_SKU导入模板.csv`
+- 订单页可直接下载 `发货管家_订单导入模板.csv`
+- 当前模板仍面向本地 SKU 与订单模型；后续若切换 OpenERP / Odoo 为商品主数据源，会在保持模板可用的前提下补充字段映射策略
 
 ## 相关运维文件
 
@@ -301,4 +312,5 @@ npm run dev
 - 新增商品图片 NAS 私有文件仓、缩略图和回收站清理链路
 - 新增 API 冒烟脚本
 - 新增设置中心第一版与 SKU 候选项治理接口
+- 新增商品/库存主数据来源配置，为未来 OpenERP / Odoo 接入预留设置与持久化边界
 - 宿主机统一启动脚本已接入本项目

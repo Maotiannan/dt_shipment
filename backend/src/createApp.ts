@@ -26,6 +26,7 @@ import {
 } from './skuAttributes/suggestions.js'
 import { commitOrderImport, previewOrderImport } from './imports/orderImport.js'
 import { commitSkuImport, previewSkuImport } from './imports/skuImport.js'
+import { getCommerceSettings, saveCommerceSettings } from './settings/commerce.js'
 
 function toProductImageSummary(row: ProductImageRow) {
   return {
@@ -439,6 +440,26 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
       return res.status((error as Error).message === 'suggestion not found' ? 404 : 400).json({
         error: (error as Error).message,
       })
+    } finally {
+      client.release()
+    }
+  })
+
+  app.get('/api/settings/commerce', requireAuth, async (_req, res) => {
+    const settings = await getCommerceSettings(pool)
+    return res.json(settings)
+  })
+
+  app.put('/api/settings/commerce', requireAuth, async (req, res) => {
+    const client = await pool.connect()
+    try {
+      await client.query('begin')
+      const saved = await saveCommerceSettings(client, req.body ?? {})
+      await client.query('commit')
+      return res.json(saved)
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined)
+      return res.status(400).json({ error: (error as Error).message })
     } finally {
       client.release()
     }

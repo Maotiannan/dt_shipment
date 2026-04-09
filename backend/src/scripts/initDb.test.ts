@@ -139,7 +139,8 @@ function makePool(scenario: Scenario) {
         normalized.includes('alter table if exists skus add column if not exists variant_name text') &&
         normalized.includes('alter table if exists orders add column if not exists delivery_channel text') &&
         normalized.includes('create table if not exists inventory_movements') &&
-        normalized.includes('create table if not exists sku_attribute_suggestions')
+        normalized.includes('create table if not exists sku_attribute_suggestions') &&
+        normalized.includes('create table if not exists app_settings')
       ) {
         for (const columnName of ['category_name', 'color_name', 'variant_name']) {
           if (!state.schemaColumnsByTable.skus.includes(columnName)) {
@@ -151,7 +152,7 @@ function makePool(scenario: Scenario) {
           state.schemaColumnsByTable.orders.push('delivery_channel')
         }
 
-        for (const tableName of ['inventory_movements', 'sku_attribute_suggestions']) {
+        for (const tableName of ['inventory_movements', 'sku_attribute_suggestions', 'app_settings']) {
           if (!state.schemaTables.includes(tableName)) {
             state.schemaTables.push(tableName)
           }
@@ -198,6 +199,13 @@ function makePool(scenario: Scenario) {
       if (normalized.startsWith('create table if not exists sku_attribute_suggestions')) {
         if (!state.schemaTables.includes('sku_attribute_suggestions')) {
           state.schemaTables.push('sku_attribute_suggestions')
+        }
+        return { rows: [] }
+      }
+
+      if (normalized.startsWith('create table if not exists app_settings')) {
+        if (!state.schemaTables.includes('app_settings')) {
+          state.schemaTables.push('app_settings')
         }
         return { rows: [] }
       }
@@ -524,7 +532,8 @@ async function readCommerceFoundationSchema(pool: ReturnType<typeof makePool>) {
           'push_subscriptions',
           'product_images',
           'inventory_movements',
-          'sku_attribute_suggestions'
+          'sku_attribute_suggestions',
+          'app_settings'
         )
     `),
   ])
@@ -588,6 +597,7 @@ test('runInitDb repairs missing commerce foundation schema and stays stable on s
   assert.equal(before.columns.has('delivery_channel'), false)
   assert.equal(before.tables.has('inventory_movements'), false)
   assert.equal(before.tables.has('sku_attribute_suggestions'), false)
+  assert.equal(before.tables.has('app_settings'), false)
 
   await runInitDb(pool, SCHEMA_SQL)
 
@@ -598,6 +608,7 @@ test('runInitDb repairs missing commerce foundation schema and stays stable on s
   assert(after.columns.has('delivery_channel'))
   assert(after.tables.has('inventory_movements'))
   assert(after.tables.has('sku_attribute_suggestions'))
+  assert(after.tables.has('app_settings'))
 
   assert.equal(
     pool.queries.some((sql) =>
@@ -617,6 +628,10 @@ test('runInitDb repairs missing commerce foundation schema and stays stable on s
   )
   assert.equal(
     pool.queries.some((sql) => sql.includes('create table if not exists sku_attribute_suggestions')),
+    true
+  )
+  assert.equal(
+    pool.queries.some((sql) => sql.includes('create table if not exists app_settings')),
     true
   )
 

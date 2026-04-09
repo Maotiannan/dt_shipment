@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 
 import {
+  createDefaultCommerceSettings,
+  loadCommerceSettings,
+  saveCommerceSettings,
+  type CommerceSettings,
+} from '../lib/commerceSettingsApi'
+import {
   createSkuSuggestionSetting,
   listSkuSuggestionSettings,
   updateSkuSuggestionSetting,
@@ -45,11 +51,16 @@ function attributeLabel(attribute: SkuSuggestionSettingAttribute) {
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [commerceLoading, setCommerceLoading] = useState(true)
+  const [commerceSaving, setCommerceSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [noticeMsg, setNoticeMsg] = useState<string | null>(null)
+  const [commerceErrorMsg, setCommerceErrorMsg] = useState<string | null>(null)
+  const [commerceNoticeMsg, setCommerceNoticeMsg] = useState<string | null>(null)
   const [records, setRecords] = useState<SkuSuggestionSettingRecord[]>([])
   const [filters, setFilters] = useState<FilterState>(emptyFilters)
   const [form, setForm] = useState<FormState>(emptyForm)
+  const [commerceForm, setCommerceForm] = useState<CommerceSettings>(createDefaultCommerceSettings())
 
   async function loadRecords(nextFilters = filters) {
     setLoading(true)
@@ -72,6 +83,32 @@ export default function SettingsPage() {
 
   useEffect(() => {
     void loadRecords(emptyFilters)
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      setCommerceLoading(true)
+      setCommerceErrorMsg(null)
+      try {
+        const settings = await loadCommerceSettings()
+        if (alive) {
+          setCommerceForm(settings)
+        }
+      } catch (error) {
+        if (alive) {
+          setCommerceErrorMsg(error instanceof Error ? error.message : '加载接入设置失败')
+        }
+      } finally {
+        if (alive) {
+          setCommerceLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      alive = false
+    }
   }, [])
 
   function resetForm() {
@@ -148,13 +185,206 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleSaveCommerceSettings() {
+    setCommerceSaving(true)
+    setCommerceErrorMsg(null)
+    setCommerceNoticeMsg(null)
+
+    try {
+      const saved = await saveCommerceSettings(commerceForm)
+      setCommerceForm(saved)
+      setCommerceNoticeMsg('商品/库存来源配置已保存')
+    } catch (error) {
+      setCommerceErrorMsg(error instanceof Error ? error.message : '保存接入设置失败')
+    } finally {
+      setCommerceSaving(false)
+    }
+  }
+
   return (
     <div className="page">
       <div className="pageHeader">
         <div className="pageHeaderLeft">
           <h2 className="pageTitle">设置中心</h2>
-          <p className="pageSub">先治理 SKU 候选项。类目做全局候选，颜色和规格按类目作用域管理。</p>
+          <p className="pageSub">先治理 SKU 候选项，并为后续接入 OpenERP / Odoo 预留商品与库存主数据来源配置。</p>
         </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 12 }}>
+        <div style={{ fontWeight: 700, color: 'var(--text-h)' }}>商品与库存主数据来源</div>
+        <p style={{ margin: '6px 0 0', fontSize: 13, opacity: 0.76 }}>
+          当前系统仍由本地库管理 SKU 和库存。这组配置先作为未来接入 OpenERP / Odoo 的适配边界，不会自动发起同步。
+        </p>
+
+        <div
+          style={{
+            marginTop: 12,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: 10,
+          }}
+        >
+          <label style={{ display: 'block' }}>
+            <div className="fieldLabel">商品主数据来源</div>
+            <select
+              className="control"
+              disabled={commerceLoading || commerceSaving}
+              value={commerceForm.catalog_source}
+              onChange={(event) =>
+                setCommerceForm((current) => ({
+                  ...current,
+                  catalog_source: event.target.value as CommerceSettings['catalog_source'],
+                }))
+              }
+            >
+              <option value="internal_db">本地库</option>
+              <option value="odoo">OpenERP / Odoo</option>
+            </select>
+          </label>
+          <label style={{ display: 'block' }}>
+            <div className="fieldLabel">库存主数据来源</div>
+            <select
+              className="control"
+              disabled={commerceLoading || commerceSaving}
+              value={commerceForm.inventory_source}
+              onChange={(event) =>
+                setCommerceForm((current) => ({
+                  ...current,
+                  inventory_source: event.target.value as CommerceSettings['inventory_source'],
+                }))
+              }
+            >
+              <option value="internal_ledger">本地库存账本</option>
+              <option value="odoo">OpenERP / Odoo</option>
+            </select>
+          </label>
+          <label style={{ display: 'block' }}>
+            <div className="fieldLabel">外部系统</div>
+            <select
+              className="control"
+              disabled={commerceLoading || commerceSaving}
+              value={commerceForm.external_system}
+              onChange={(event) =>
+                setCommerceForm((current) => ({
+                  ...current,
+                  external_system: event.target.value as CommerceSettings['external_system'],
+                }))
+              }
+            >
+              <option value="odoo">OpenERP / Odoo</option>
+            </select>
+          </label>
+          <label style={{ display: 'block' }}>
+            <div className="fieldLabel">Odoo API 模式</div>
+            <select
+              className="control"
+              disabled={commerceLoading || commerceSaving}
+              value={commerceForm.odoo_api_mode}
+              onChange={(event) =>
+                setCommerceForm((current) => ({
+                  ...current,
+                  odoo_api_mode: event.target.value as CommerceSettings['odoo_api_mode'],
+                }))
+              }
+            >
+              <option value="json2">JSON-2</option>
+              <option value="rpc_legacy">XML-RPC / JSON-RPC 兼容</option>
+            </select>
+          </label>
+          <label style={{ display: 'block' }}>
+            <div className="fieldLabel">Odoo 地址</div>
+            <input
+              className="control"
+              disabled={commerceLoading || commerceSaving}
+              value={commerceForm.odoo_base_url}
+              onChange={(event) =>
+                setCommerceForm((current) => ({
+                  ...current,
+                  odoo_base_url: event.target.value,
+                }))
+              }
+              placeholder="例如：https://erp.example.com"
+            />
+          </label>
+          <label style={{ display: 'block' }}>
+            <div className="fieldLabel">数据库 / 租户</div>
+            <input
+              className="control"
+              disabled={commerceLoading || commerceSaving}
+              value={commerceForm.odoo_database}
+              onChange={(event) =>
+                setCommerceForm((current) => ({
+                  ...current,
+                  odoo_database: event.target.value,
+                }))
+              }
+              placeholder="例如：dainty"
+            />
+          </label>
+          <label style={{ display: 'block', gridColumn: '1 / -1' }}>
+            <div className="fieldLabel">备注</div>
+            <textarea
+              className="control"
+              disabled={commerceLoading || commerceSaving}
+              value={commerceForm.notes}
+              onChange={(event) =>
+                setCommerceForm((current) => ({
+                  ...current,
+                  notes: event.target.value,
+                }))
+              }
+              placeholder="记录未来映射策略，例如：SKU 以 default_code 为唯一键，库存读 stock.quant。"
+              rows={3}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
+          当前最后更新时间：{commerceForm.updated_at ? new Date(commerceForm.updated_at).toLocaleString() : '未保存'}
+        </div>
+
+        <div className="btnRow">
+          <button
+            className="primaryBtn"
+            type="button"
+            disabled={commerceLoading || commerceSaving}
+            onClick={() => void handleSaveCommerceSettings()}
+          >
+            保存接入配置
+          </button>
+        </div>
+
+        {commerceErrorMsg ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 12,
+              border: '1px solid rgba(185, 28, 28, 0.25)',
+              color: '#b91c1c',
+              background: 'rgba(255, 0, 0, 0.05)',
+              fontSize: 13,
+            }}
+          >
+            {commerceErrorMsg}
+          </div>
+        ) : null}
+
+        {commerceNoticeMsg ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 12,
+              border: '1px solid rgba(21, 128, 61, 0.2)',
+              color: '#15803d',
+              background: 'rgba(21, 128, 61, 0.06)',
+              fontSize: 13,
+            }}
+          >
+            {commerceNoticeMsg}
+          </div>
+        ) : null}
       </div>
 
       <div className="card" style={{ marginTop: 12 }}>

@@ -75,7 +75,7 @@ const COMMERCE_FOUNDATION_TABLES_SQL = `
   select table_name
   from information_schema.tables
   where table_schema = current_schema()
-    and table_name in ('inventory_movements', 'sku_attribute_suggestions')
+    and table_name in ('inventory_movements', 'sku_attribute_suggestions', 'app_settings')
 `
 
 const COMMERCE_FOUNDATION_SCHEMA_STRUCTURE_REPAIR_SQL = `
@@ -103,6 +103,12 @@ create table if not exists sku_attribute_suggestions (
   source text not null,
   is_enabled boolean not null default true,
   created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists app_settings (
+  setting_key text primary key,
+  setting_value jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
 );
 `
