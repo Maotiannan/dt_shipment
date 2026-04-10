@@ -343,6 +343,32 @@ export default function SettingsPage() {
           当前最后更新时间：{commerceForm.updated_at ? new Date(commerceForm.updated_at).toLocaleString() : '未保存'}
         </div>
 
+        <div
+          style={{
+            marginTop: 10,
+            padding: '10px 12px',
+            borderRadius: 12,
+            background: 'rgba(255,255,255,0.5)',
+            border: '1px solid var(--border)',
+            fontSize: 12,
+            lineHeight: 1.6,
+          }}
+        >
+          <div>当前请求的商品源：{commerceForm.catalog_source === 'odoo' ? 'OpenERP / Odoo' : '本地库'}</div>
+          <div>当前实际生效的商品源：{commerceForm.effective_catalog_source === 'odoo' ? 'OpenERP / Odoo' : '本地库'}</div>
+          <div>当前请求的库存源：{commerceForm.inventory_source === 'odoo' ? 'OpenERP / Odoo' : '本地库存账本'}</div>
+          <div>当前实际生效的库存源：{commerceForm.effective_inventory_source === 'odoo' ? 'OpenERP / Odoo' : '本地库存账本'}</div>
+          {!commerceForm.catalog_adapter_ready || !commerceForm.inventory_adapter_ready ? (
+            <div style={{ marginTop: 4, color: '#b45309' }}>
+              Odoo 适配器尚未接通，当前运行仍回落到内部 provider。下一步会接真实读取接口。
+            </div>
+          ) : (
+            <div style={{ marginTop: 4, color: '#15803d' }}>
+              当前运行完全由内部 provider 提供商品和库存读取。
+            </div>
+          )}
+        </div>
+
         <div className="btnRow">
           <button
             className="primaryBtn"

@@ -158,7 +158,11 @@ async function main() {
   })
   if (
     initialCommerceSettings?.catalog_source !== 'internal_db' ||
-    initialCommerceSettings?.inventory_source !== 'internal_ledger'
+    initialCommerceSettings?.inventory_source !== 'internal_ledger' ||
+    initialCommerceSettings?.effective_catalog_source !== 'internal_db' ||
+    initialCommerceSettings?.effective_inventory_source !== 'internal_ledger' ||
+    initialCommerceSettings?.catalog_adapter_ready !== true ||
+    initialCommerceSettings?.inventory_adapter_ready !== true
   ) {
     throw new Error(
       `/api/settings/commerce returned unexpected defaults: ${JSON.stringify(initialCommerceSettings)}`
@@ -184,7 +188,11 @@ async function main() {
   if (
     updatedCommerceSettings?.catalog_source !== 'odoo' ||
     updatedCommerceSettings?.inventory_source !== 'odoo' ||
-    updatedCommerceSettings?.odoo_api_mode !== 'rpc_legacy'
+    updatedCommerceSettings?.odoo_api_mode !== 'rpc_legacy' ||
+    updatedCommerceSettings?.effective_catalog_source !== 'internal_db' ||
+    updatedCommerceSettings?.effective_inventory_source !== 'internal_ledger' ||
+    updatedCommerceSettings?.catalog_adapter_ready !== false ||
+    updatedCommerceSettings?.inventory_adapter_ready !== false
   ) {
     throw new Error(
       `/api/settings/commerce update returned unexpected payload: ${JSON.stringify(updatedCommerceSettings)}`

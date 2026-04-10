@@ -767,6 +767,10 @@ dbTest(
     const initial = JSON.parse(initialBody) as {
       catalog_source: string
       inventory_source: string
+      effective_catalog_source: string
+      effective_inventory_source: string
+      catalog_adapter_ready: boolean
+      inventory_adapter_ready: boolean
       external_system: string
       odoo_api_mode: string
       odoo_base_url: string | null
@@ -774,6 +778,10 @@ dbTest(
     }
     assert.equal(initial.catalog_source, 'internal_db')
     assert.equal(initial.inventory_source, 'internal_ledger')
+    assert.equal(initial.effective_catalog_source, 'internal_db')
+    assert.equal(initial.effective_inventory_source, 'internal_ledger')
+    assert.equal(initial.catalog_adapter_ready, true)
+    assert.equal(initial.inventory_adapter_ready, true)
     assert.equal(initial.external_system, 'odoo')
     assert.equal(initial.odoo_api_mode, 'json2')
     assert.equal(initial.odoo_base_url, null)
@@ -791,6 +799,10 @@ dbTest(
     const updated = JSON.parse(updateRes.text) as {
       catalog_source: string
       inventory_source: string
+      effective_catalog_source: string
+      effective_inventory_source: string
+      catalog_adapter_ready: boolean
+      inventory_adapter_ready: boolean
       external_system: string
       odoo_api_mode: string
       odoo_base_url: string | null
@@ -800,6 +812,10 @@ dbTest(
     }
     assert.equal(updated.catalog_source, 'odoo')
     assert.equal(updated.inventory_source, 'odoo')
+    assert.equal(updated.effective_catalog_source, 'internal_db')
+    assert.equal(updated.effective_inventory_source, 'internal_ledger')
+    assert.equal(updated.catalog_adapter_ready, false)
+    assert.equal(updated.inventory_adapter_ready, false)
     assert.equal(updated.external_system, 'odoo')
     assert.equal(updated.odoo_api_mode, 'rpc_legacy')
     assert.equal(updated.odoo_base_url, 'https://erp.example.com')
@@ -815,12 +831,20 @@ dbTest(
     const persisted = JSON.parse(persistedBody) as {
       catalog_source: string
       inventory_source: string
+      effective_catalog_source: string
+      effective_inventory_source: string
+      catalog_adapter_ready: boolean
+      inventory_adapter_ready: boolean
       odoo_base_url: string | null
       odoo_database: string | null
       notes: string | null
     }
     assert.equal(persisted.catalog_source, 'odoo')
     assert.equal(persisted.inventory_source, 'odoo')
+    assert.equal(persisted.effective_catalog_source, 'internal_db')
+    assert.equal(persisted.effective_inventory_source, 'internal_ledger')
+    assert.equal(persisted.catalog_adapter_ready, false)
+    assert.equal(persisted.inventory_adapter_ready, false)
     assert.equal(persisted.odoo_base_url, 'https://erp.example.com')
     assert.equal(persisted.odoo_database, 'dainty')
     assert.equal(persisted.notes, 'future master data owner')

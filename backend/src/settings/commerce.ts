@@ -20,6 +20,13 @@ export type CommerceSettings = {
   updated_at: string | null
 }
 
+export type CommerceSettingsView = CommerceSettings & {
+  effective_catalog_source: CatalogSource
+  effective_inventory_source: InventorySource
+  catalog_adapter_ready: boolean
+  inventory_adapter_ready: boolean
+}
+
 const SETTING_KEY = 'commerce_settings'
 
 export const DEFAULT_COMMERCE_SETTINGS: CommerceSettings = {
@@ -90,6 +97,19 @@ export async function getCommerceSettings(client: CommerceQueryClient) {
     ...normalizeCommerceSettingsInput(row.setting_value, DEFAULT_COMMERCE_SETTINGS),
     updated_at: row.updated_at,
   } satisfies CommerceSettings
+}
+
+export function toCommerceSettingsView(settings: CommerceSettings): CommerceSettingsView {
+  const catalogAdapterReady = settings.catalog_source === 'internal_db'
+  const inventoryAdapterReady = settings.inventory_source === 'internal_ledger'
+
+  return {
+    ...settings,
+    effective_catalog_source: catalogAdapterReady ? settings.catalog_source : 'internal_db',
+    effective_inventory_source: inventoryAdapterReady ? settings.inventory_source : 'internal_ledger',
+    catalog_adapter_ready: catalogAdapterReady,
+    inventory_adapter_ready: inventoryAdapterReady,
+  }
 }
 
 export async function saveCommerceSettings(

@@ -8,6 +8,10 @@ export type OdooApiMode = 'json2' | 'rpc_legacy'
 export type CommerceSettings = {
   catalog_source: CatalogSource
   inventory_source: InventorySource
+  effective_catalog_source: CatalogSource
+  effective_inventory_source: InventorySource
+  catalog_adapter_ready: boolean
+  inventory_adapter_ready: boolean
   external_system: ExternalSystem
   odoo_base_url: string
   odoo_database: string
@@ -20,6 +24,10 @@ export function createDefaultCommerceSettings(): CommerceSettings {
   return {
     catalog_source: 'internal_db',
     inventory_source: 'internal_ledger',
+    effective_catalog_source: 'internal_db',
+    effective_inventory_source: 'internal_ledger',
+    catalog_adapter_ready: true,
+    inventory_adapter_ready: true,
     external_system: 'odoo',
     odoo_base_url: '',
     odoo_database: '',

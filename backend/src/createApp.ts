@@ -26,7 +26,7 @@ import {
 } from './skuAttributes/suggestions.js'
 import { commitOrderImport, previewOrderImport } from './imports/orderImport.js'
 import { commitSkuImport, previewSkuImport } from './imports/skuImport.js'
-import { getCommerceSettings, saveCommerceSettings } from './settings/commerce.js'
+import { getCommerceSettings, saveCommerceSettings, toCommerceSettingsView } from './settings/commerce.js'
 
 function toProductImageSummary(row: ProductImageRow) {
   return {
@@ -447,7 +447,7 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
 
   app.get('/api/settings/commerce', requireAuth, async (_req, res) => {
     const settings = await getCommerceSettings(pool)
-    return res.json(settings)
+    return res.json(toCommerceSettingsView(settings))
   })
 
   app.put('/api/settings/commerce', requireAuth, async (req, res) => {
@@ -456,7 +456,7 @@ export function createApp(env: NodeJS.ProcessEnv = process.env) {
       await client.query('begin')
       const saved = await saveCommerceSettings(client, req.body ?? {})
       await client.query('commit')
-      return res.json(saved)
+      return res.json(toCommerceSettingsView(saved))
     } catch (error) {
       await client.query('rollback').catch(() => undefined)
       return res.status(400).json({ error: (error as Error).message })
